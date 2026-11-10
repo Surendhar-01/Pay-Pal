@@ -1276,6 +1276,118 @@ async def test_ollama_provider_sends_configured_model_and_validates_json():
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("language", "language_name"),
+    [("ta-IN", "Tamil"), ("hi-IN", "Hindi")],
+)
+async def test_ollama_translates_requirement_with_dedicated_prompt(language, language_name):
+    calls = []
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "content": "I need a laptop with 16GB RAM and 512GB SSD. My budget is 80,000 rupees."
+                }
+            },
+        )
+
+    provider = OllamaProvider(
+        Settings(
+            _env_file=None,
+            AI_PROVIDER="ollama",
+            OLLAMA_BASE_URL="http://ollama.test",
+            OLLAMA_MODEL="qwen3-test",
+        ),
+        transport=httpx.MockTransport(handle_request),
+    )
+    result = await provider.translate_requirement(
+        "16GB RAM, 512GB SSD, 80000 rupees",
+        language,
+    )
+
+    assert result == "I need a laptop with 16GB RAM and 512GB SSD. My budget is 80,000 rupees."
+    assert calls[0]["model"] == "qwen3-test"
+    assert calls[0]["stream"] is False
+    assert calls[0]["think"] is False
+    assert calls[0]["messages"][0]["content"] == (
+        "You are a professional multilingual translator for a B2B product marketplace.\n\n"
+        "Translate the provided customer requirement into clear English.\n\n"
+        "Preserve the complete original meaning.\n\n"
+        "Do not summarize, add assumptions, or remove information.\n\n"
+        "Preserve product names, brands, technical specifications, model numbers, quantities, "
+        "numerical values, prices, currencies, and measurement units exactly.\n\n"
+        "Do not convert currencies or change numerical values.\n\n"
+        "If a phrase is ambiguous, preserve its meaning as closely as possible without "
+        "inventing missing information.\n\nReturn only the English translation."
+    )
+    assert language_name in calls[0]["messages"][1]["content"]
+    assert "80000" in calls[0]["messages"][1]["content"]
+
+
+def test_translation_endpoint_returns_english_text_from_configured_ollama(monkeypatch):
+    async def handle_request(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"message": {"content": "I need a laptop with 16GB RAM."}},
+        )
+
+    provider = OllamaProvider(
+        Settings(_env_file=None, AI_PROVIDER="ollama"),
+        transport=httpx.MockTransport(handle_request),
+    )
+    monkeypatch.setattr(ai_endpoint, "create_ai_provider", lambda: provider)
+
+    response = TestClient(app).post(
+        "/api/v1/ai/translate-requirement",
+        json={"text": "எனக்கு 16GB RAM உடன் ஒரு லேப்டாப் வேண்டும்.", "language": "ta-IN"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"translated_text": "I need a laptop with 16GB RAM."}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"text": "Need a laptop", "language": "en-IN"},
+        {"text": "", "language": "ta-IN"},
+        {"text": "x" * 2001, "language": "hi-IN"},
+        {"text": "Need a laptop", "language": "ta-IN", "unexpected": True},
+    ],
+)
+def test_translation_endpoint_validates_language_and_text(payload):
+    response = TestClient(app).post(
+        "/api/v1/ai/translate-requirement",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_translation_endpoint_maps_ollama_timeout_safely(monkeypatch):
+    async def handle_request(_: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("private timeout detail")
+
+    provider = OllamaProvider(
+        Settings(_env_file=None, AI_PROVIDER="ollama"),
+        transport=httpx.MockTransport(handle_request),
+    )
+    monkeypatch.setattr(ai_endpoint, "create_ai_provider", lambda: provider)
+
+    response = TestClient(app).post(
+        "/api/v1/ai/translate-requirement",
+        json={"text": "Need a laptop", "language": "hi-IN"},
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error"] == "Translation took too long. Please retry."
+    assert "private timeout detail" not in response.text
+
+
+@pytest.mark.anyio
 async def test_ollama_invalid_json_raises_controlled_provider_error():
     calls = 0
 

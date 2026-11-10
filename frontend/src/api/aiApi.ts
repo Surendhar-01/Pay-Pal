@@ -99,6 +99,18 @@ export const sendAIConversationMessage = async (
   return response.data;
 };
 
+export const translateRequirementText = async (
+  text: string,
+  language: 'ta-IN' | 'hi-IN'
+): Promise<string> => {
+  const response = await axiosClient.post<{ translated_text: string }>(
+    '/api/v1/ai/translate-requirement',
+    { text, language },
+    { timeout: 150000 }
+  );
+  return response.data.translated_text;
+};
+
 export const matchProductsToRequirements = async (
   requirementDraft: RequirementDraft
 ): Promise<ProductMatchingResponse> => {

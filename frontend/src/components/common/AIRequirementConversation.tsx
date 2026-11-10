@@ -14,12 +14,17 @@ import {
 } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import {
+  ArrowRightOutlined,
+  AudioOutlined,
   DeleteOutlined,
+  EditOutlined,
   RobotOutlined,
   SendOutlined,
   ShoppingCartOutlined,
+  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
+import VoiceRequirementInput from './VoiceRequirementInput';
 import {
   AIConversationPayload,
   ConversationMessage,
@@ -448,6 +453,7 @@ export const AIRequirementConversation: React.FC = () => {
   const [requirementDraft, setRequirementDraft] = useState<RequirementDraft | null>(saved.requirementDraft);
   const [ready, setReady] = useState(saved.ready);
   const [input, setInput] = useState('');
+  const [inputMethod, setInputMethod] = useState<'type' | 'voice'>('type');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
@@ -807,35 +813,73 @@ export const AIRequirementConversation: React.FC = () => {
             <RobotOutlined />
             <span>MARKETTWIN AI</span>
           </div>
-          <Title className="ai-discovery-title">What are you looking for?</Title>
+          <Title className="ai-discovery-title">Find the Right Products with AI</Title>
           <Paragraph className="ai-discovery-subtitle">
-            Describe the product you need. MarketTwin AI will understand your requirements and help
-            you define exactly what to look for.
+            Describe what you need. Speak or type your requirements, and let MarketTwin AI find the best products for you.
           </Paragraph>
 
           <form className="ai-composer ai-composer--hero" onSubmit={handleSubmit}>
+            <div className="ai-composer-heading">
+              <span className="ai-composer-sparkle"><ThunderboltOutlined /></span>
+              <div>
+                <Text className="ai-composer-title">What product are you looking for?</Text>
+                <Text className="ai-composer-hint">Share the details that matter to you</Text>
+              </div>
+            </div>
             <TextArea
+              className="ai-requirement-textarea"
               ref={inputRef}
-              aria-label="Describe the product you need"
-              autoSize={{ minRows: 3, maxRows: 6 }}
+              aria-label="English product requirement to submit"
+              autoSize={{ minRows: 6, maxRows: 9 }}
               maxLength={2000}
               showCount
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Describe the product you want... For example, I need an SS 304 industrial water storage tank with 1000-litre capacity."
+              placeholder={'Describe the product you need...\n\nExample: I need an SS 304 industrial water storage tank with 1000-litre capacity.'}
               disabled={loading}
             />
-            <div className="ai-composer-footer">
-              <Text type="secondary">Press Enter to send · Shift + Enter for a new line</Text>
+            <div className="ai-input-methods" role="tablist" aria-label="Requirement input method">
+              <button
+                className={`ai-input-method${inputMethod === 'type' ? ' is-active' : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={inputMethod === 'type'}
+                onClick={() => {
+                  setInputMethod('type');
+                  inputRef.current?.focus();
+                }}
+              >
+                <EditOutlined />
+                <span>Type Requirement</span>
+              </button>
+              <button
+                className={`ai-input-method${inputMethod === 'voice' ? ' is-active' : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={inputMethod === 'voice'}
+                onClick={() => setInputMethod('voice')}
+              >
+                <AudioOutlined />
+                <span>Voice Input</span>
+              </button>
+            </div>
+            {inputMethod === 'voice' && (
+              <div className="ai-voice-panel">
+                <VoiceRequirementInput value={input} onChange={setInput} disabled={loading} />
+              </div>
+            )}
+            <div className="ai-composer-footer ai-composer-footer--hero">
+              <Text type="secondary">Your requirements are reviewed before we find products.</Text>
               <Button
+                className="ai-find-products-button"
                 type="primary"
                 htmlType="submit"
-                icon={<SendOutlined />}
+                icon={<ArrowRightOutlined />}
                 loading={loading}
                 disabled={!input.trim()}
               >
-                Start
+                Find Products
               </Button>
             </div>
           </form>
@@ -943,6 +987,7 @@ export const AIRequirementConversation: React.FC = () => {
 
           {!ready && (
             <form className="ai-composer ai-composer--conversation" onSubmit={handleSubmit}>
+              <Text className="ai-voice-input-label">English reply to MarketTwin AI</Text>
               <TextArea
                 ref={inputRef}
                 aria-label="Reply to MarketTwin AI"
@@ -956,15 +1001,18 @@ export const AIRequirementConversation: React.FC = () => {
               />
               <div className="ai-composer-footer">
                 <Text type="secondary">Shift + Enter for a new line</Text>
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  icon={<SendOutlined />}
-                  loading={loading}
-                  disabled={!input.trim()}
-                >
-                  Send
-                </Button>
+                <div className="ai-composer-actions">
+                  <VoiceRequirementInput value={input} onChange={setInput} disabled={loading} />
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    icon={<SendOutlined />}
+                    loading={loading}
+                    disabled={!input.trim()}
+                  >
+                    Send
+                  </Button>
+                </div>
               </div>
             </form>
           )}
