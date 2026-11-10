@@ -116,6 +116,7 @@ INSERT INTO public.demand_group_family_aliases (
     ('samsung 5g smartphone', 'mobile phones', 'samsung_smartphone', 'samsung_mobile_phones', 'phase4-compatible-pair', TRUE, now()),
     ('samsung galaxy smartphone suitable', 'electronics mobile phones samsung smartphones', 'samsung_smartphone', 'samsung_mobile_phones', 'phase4-compatible-pair', TRUE, now()),
     ('wireless over ear headphones', 'electronics', 'wireless_headphones', 'wireless_headphones', 'phase4-compatible-pair', TRUE, now()),
+    ('wireless over ear headphones', 'electronics audio wireless headphones', 'wireless_headphones', 'wireless_headphones', 'phase4-compatible-pair', TRUE, now()),
     ('affordable wireless over ear headphones', 'electronics audio wireless headphones', 'wireless_headphones', 'wireless_headphones', 'phase4-compatible-pair', TRUE, now())
 ON CONFLICT (product_name_key, category_path_key) DO NOTHING;
 

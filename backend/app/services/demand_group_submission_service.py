@@ -1,14 +1,20 @@
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 import logging
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 
+from app.core.config import get_settings
 from app.services.demand_compatibility import (
     assess_demand_grouping_readiness,
     assess_group_compatibility,
 )
 from app.services.demand_embedding_service import (
     DemandEmbeddingService,
+    DemandEmbeddingResult,
+    build_embedding_input,
+    calculate_embedding_input_hash,
+    get_demand_embedding,
     persist_demand_embedding,
     search_demand_embedding_candidates,
 )
@@ -137,6 +143,19 @@ def _record_review(
     return _rpc_data(result)
 
 
+def _persist_candidate_diagnostics(
+    client: Any,
+    demand_id: str,
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> None:
+    if diagnostics:
+        evaluated_at = datetime.now(timezone.utc).isoformat()
+        client.table("demand_grouping_candidate_diagnostics").upsert(
+            [{**item, "evaluated_at": evaluated_at} for item in diagnostics],
+            on_conflict="demand_id,candidate_group_id",
+        ).execute()
+
+
 async def try_group_new_demand(demand: Mapping[str, Any], client: Any) -> dict[str, Any]:
     """Use exact taxonomy aliases and mandatory compatibility before any group attach."""
     if demand.get("group_id") is not None or demand.get("grouping_status") == "grouped":
@@ -149,6 +168,54 @@ async def try_group_new_demand(demand: Mapping[str, Any], client: Any) -> dict[s
         str(demand.get("title") or ""),
         str(demand.get("category") or ""),
     )
+
+    embedding_demand = {
+        **demand,
+        "product_name": demand.get("title") or demand.get("product_name"),
+    }
+    try:
+        settings = get_settings()
+        expected_hash = calculate_embedding_input_hash(
+            build_embedding_input(embedding_demand),
+            settings.OLLAMA_EMBEDDING_VERSION,
+        )
+        stored_embedding = get_demand_embedding(demand_id, client=client)
+        if (
+            stored_embedding is not None
+            and stored_embedding.embedding_model == settings.OLLAMA_EMBEDDING_MODEL
+            and stored_embedding.embedding_version == settings.OLLAMA_EMBEDDING_VERSION
+            and stored_embedding.input_hash == expected_hash
+        ):
+            embedding = DemandEmbeddingResult(
+                embedding=stored_embedding.embedding,
+                embedding_model=stored_embedding.embedding_model,
+                embedding_version=stored_embedding.embedding_version,
+                input_hash=stored_embedding.input_hash,
+            )
+            embedding_is_stored = True
+        else:
+            embedding = await DemandEmbeddingService().generate(embedding_demand)
+            embedding_is_stored = False
+    except Exception as exc:
+        logger.warning("Demand embedding read or generation failed (%s).", type(exc).__name__)
+        return _record_review(client, demand_id, customer_id, "compatibility_assessment_failed")
+    if not embedding_is_stored:
+        try:
+            persist_demand_embedding(demand_id, embedding, client=client)
+        except Exception as exc:
+            logger.warning("Demand embedding persistence failed (%s).", type(exc).__name__)
+            return _record_review(client, demand_id, customer_id, "compatibility_assessment_failed")
+    try:
+        semantic_candidates = search_demand_embedding_candidates(
+            embedding.embedding,
+            embedding_model=embedding.embedding_model,
+            embedding_version=embedding.embedding_version,
+            exclude_demand_id=demand_id,
+            client=client,
+        )
+    except Exception as exc:
+        logger.warning("Semantic candidate search for demand %s failed (%s).", demand_id, type(exc).__name__)
+        return _record_review(client, demand_id, customer_id, "compatibility_assessment_failed")
     if canonical is None:
         return dict(demand)
 
@@ -170,34 +237,6 @@ async def try_group_new_demand(demand: Mapping[str, Any], client: Any) -> dict[s
     readiness = assess_demand_grouping_readiness(demand_v2)
     if readiness.status != "compatible":
         return _record_review(client, demand_id, customer_id, "candidate_compatibility_unresolved")
-
-    embedding_demand = {
-        **demand,
-        "product_name": demand.get("title") or demand.get("product_name"),
-        "product_type": normalized_source.get("product_type"),
-        "normalized_requirements": normalized_source,
-    }
-    try:
-        embedding = await DemandEmbeddingService().generate(embedding_demand)
-    except Exception as exc:
-        logger.warning("Demand embedding generation failed (%s).", type(exc).__name__)
-        return _record_review(client, demand_id, customer_id, "compatibility_assessment_failed")
-    try:
-        persist_demand_embedding(demand_id, embedding, client=client)
-    except Exception as exc:
-        logger.warning("Demand embedding persistence failed (%s).", type(exc).__name__)
-        return _record_review(client, demand_id, customer_id, "compatibility_assessment_failed")
-    try:
-        semantic_candidates = search_demand_embedding_candidates(
-            embedding.embedding,
-            embedding_model=embedding.embedding_model,
-            embedding_version=embedding.embedding_version,
-            exclude_demand_id=demand_id,
-            client=client,
-        )
-    except Exception as exc:
-        logger.warning("Semantic candidate search failed (%s).", type(exc).__name__)
-        return _record_review(client, demand_id, customer_id, "compatibility_assessment_failed")
 
     candidate_distance_by_demand: dict[str, float] = {}
     for candidate in semantic_candidates:
@@ -247,37 +286,57 @@ async def try_group_new_demand(demand: Mapping[str, Any], client: Any) -> dict[s
                     if row.get("demand_id")
                 })
     except Exception as exc:
-        logger.warning("Family candidate retrieval failed (%s).", type(exc).__name__)
+        logger.warning("Family candidate retrieval for demand %s failed (%s).", demand_id, type(exc).__name__)
         return _record_review(client, demand_id, customer_id, "candidate_compatibility_unresolved")
 
     candidate_group_distances: dict[str, float] = {}
+    candidate_demands_by_group: dict[str, set[str]] = defaultdict(set)
     family_group_id_set = set(family_group_ids)
     for row in group_demands:
-        demand_candidate_distance = candidate_distance_by_demand.get(str(row.get("id")))
+        candidate_demand_id = str(row.get("id") or "")
+        demand_candidate_distance = candidate_distance_by_demand.get(candidate_demand_id)
         group_id = str(row.get("group_id") or "")
         if demand_candidate_distance is None or group_id not in family_group_id_set:
             continue
+        candidate_demands_by_group[group_id].add(candidate_demand_id)
         previous_distance = candidate_group_distances.get(group_id)
         if previous_distance is None or demand_candidate_distance < previous_distance:
             candidate_group_distances[group_id] = demand_candidate_distance
 
     compatible_groups: list[tuple[Mapping[str, Any], float]] = []
     has_unresolved_candidate = False
+    candidate_diagnostics: list[dict[str, Any]] = []
     for group in family_groups:
         group_id = str(group["id"])
         rows = [row for row in group_demands if str(row.get("group_id")) == group_id]
-        if (
-            group.get("group_status") != "Proposed"
-            or group.get("status") != "Forming"
-            or group.get("bidding_status") != "closed"
-            or group.get("approved_at") is not None
-            or group.get("approved_by") is not None
-            or group.get("offers_count") != 0
-            or not rows
-            or not _group_membership_is_complete(group_id, rows, memberships)
-            or any(str(row.get("id")) not in normalized_by_id for row in rows)
-        ):
-            has_unresolved_candidate = True
+        eligibility_reasons = []
+        if group.get("group_status") != "Proposed":
+            eligibility_reasons.append("candidate_group_not_proposed")
+        if group.get("status") != "Forming":
+            eligibility_reasons.append("candidate_group_not_forming")
+        if group.get("bidding_status") != "closed":
+            eligibility_reasons.append("candidate_group_bidding_not_closed")
+        if group.get("approved_at") is not None or group.get("approved_by") is not None:
+            eligibility_reasons.append("candidate_group_approved")
+        if group.get("offers_count") != 0:
+            eligibility_reasons.append("candidate_group_has_offers")
+        if not rows:
+            eligibility_reasons.append("candidate_group_has_no_demands")
+        elif not _group_membership_is_complete(group_id, rows, memberships):
+            eligibility_reasons.append("candidate_group_membership_incomplete")
+        if any(str(row.get("id")) not in normalized_by_id for row in rows):
+            eligibility_reasons.append("candidate_normalized_requirements_missing")
+        if eligibility_reasons:
+            candidate_diagnostics.append({
+                "demand_id": demand_id,
+                "candidate_group_id": group_id,
+                "candidate_demand_ids": sorted(candidate_demands_by_group[group_id]),
+                "cosine_distance": candidate_group_distances.get(group_id),
+                "assessment_status": "ineligible",
+                "reason_codes": eligibility_reasons,
+            })
+            if candidate_demands_by_group[group_id]:
+                has_unresolved_candidate = True
             continue
         try:
             records = [
@@ -292,13 +351,40 @@ async def try_group_new_demand(demand: Mapping[str, Any], client: Any) -> dict[s
             ]
             assessment = assess_group_compatibility([*records, demand_v2])
         except Exception as exc:
-            logger.warning("Group compatibility assessment failed (%s).", type(exc).__name__)
+            logger.warning(
+                "Group compatibility assessment for demand %s and group %s failed (%s).",
+                demand_id,
+                group_id,
+                type(exc).__name__,
+            )
+            candidate_diagnostics.append({
+                "demand_id": demand_id,
+                "candidate_group_id": group_id,
+                "candidate_demand_ids": sorted(candidate_demands_by_group[group_id]),
+                "cosine_distance": candidate_group_distances.get(group_id),
+                "assessment_status": "needs_review",
+                "reason_codes": ["candidate_compatibility_assessment_failed"],
+            })
             has_unresolved_candidate = True
             continue
+        candidate_diagnostics.append({
+            "demand_id": demand_id,
+            "candidate_group_id": group_id,
+            "candidate_demand_ids": sorted(candidate_demands_by_group[group_id]),
+            "cosine_distance": candidate_group_distances.get(group_id),
+            "assessment_status": assessment.status,
+            "reason_codes": list(assessment.reasons),
+        })
         if assessment.status == "compatible":
             compatible_groups.append((group, candidate_group_distances.get(group_id, float("inf"))))
-        elif assessment.status not in {"rejected", "incompatible"}:
+        elif assessment.status not in {"needs_review", "rejected", "incompatible"}:
             has_unresolved_candidate = True
+
+    try:
+        _persist_candidate_diagnostics(client, demand_id, candidate_diagnostics)
+    except Exception as exc:
+        logger.warning("Candidate diagnostics persistence for demand %s failed (%s).", demand_id, type(exc).__name__)
+        return _record_review(client, demand_id, customer_id, "candidate_compatibility_unresolved")
 
     if has_unresolved_candidate:
         return _record_review(client, demand_id, customer_id, "candidate_compatibility_unresolved")

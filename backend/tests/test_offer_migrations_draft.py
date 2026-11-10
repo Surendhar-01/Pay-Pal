@@ -15,10 +15,12 @@ def test_draft_migrations_have_a_contiguous_numeric_order():
         "022_merchant_offer_writes_draft.sql",
         "023_offer_acceptance_draft.sql",
         "024_demand_embeddings_draft.sql",
+        "025_wireless_headphone_category_alias_draft.sql",
+        "026_grouping_retry_safety_draft.sql",
     )
 
     assert all((MIGRATIONS / name).is_file() for name in expected)
-    assert [name[:3] for name in expected] == ["020", "021", "022", "023", "024"]
+    assert [name[:3] for name in expected] == ["020", "021", "022", "023", "024", "025", "026"]
     assert not any(path.name.startswith("019b_") for path in MIGRATIONS.glob("*.sql"))
 
 

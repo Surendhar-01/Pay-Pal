@@ -1,4 +1,6 @@
 import re
+import json
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Sequence
 
@@ -8,6 +10,8 @@ from app.schemas.ai import (
     ConversationMessage,
     RequirementDraft,
 )
+from app.core.config import get_settings
+from app.core.request_context import request_id_context
 from app.services.ai.base import AIProvider
 from app.services.ai.price_understanding import (
     SUPPORTED_CURRENCY_CODES,
@@ -1561,6 +1565,19 @@ class ConversationService:
 
     async def respond(self, request: AIConversationRequest) -> AIConversationResponse:
         draft = request.requirement_draft or RequirementDraft()
+        settings = get_settings()
+        input_characters = (
+            len(request.message)
+            + sum(len(item.content) for item in request.conversation_history)
+            + len(json.dumps(draft.model_dump(), ensure_ascii=False))
+        )
+        logging.getLogger("markettwin.ai.conversation").info(
+            "AI conversation service started request_id=%s provider=%s model=%s input_characters=%d",
+            request_id_context.get(),
+            settings.AI_PROVIDER,
+            settings.OLLAMA_MODEL if settings.AI_PROVIDER.strip().lower() == "ollama" else "unknown",
+            input_characters,
+        )
         generated = await self._provider.converse(
             request.message,
             request.conversation_history,

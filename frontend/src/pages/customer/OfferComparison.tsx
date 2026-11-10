@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Row,
   Col,
@@ -29,10 +29,12 @@ const { Title, Text } = Typography;
 
 export const OfferComparison: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedOfferId = searchParams.get('offer') || '';
   const [syncing, setSyncing] = useState(false);
   const [selectedOffer, setSelectedOffer] = useState<CustomerOffer | null>(null);
   const [confirmed, setConfirmed] = useState(false);
-  const [demandId, setDemandId] = useState('');
+  const [demandId, setDemandId] = useState(searchParams.get('demand') || '');
   const [offers, setOffers] = useState<CustomerOffer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -249,11 +251,12 @@ export const OfferComparison: React.FC = () => {
       <Row gutter={[20, 20]}>
         {comparisonOffers.map((offer, index) => {
           const isBestValue = index === 0;
+          const isLinkedOffer = offer.id === linkedOfferId;
           return (
             <Col xs={24} md={8} key={offer.id}>
               <div
                 style={{
-                  border: isBestValue ? '2px solid #2563EB' : '1px solid #E2E8F0',
+                  border: isLinkedOffer ? '3px solid #0F766E' : isBestValue ? '2px solid #2563EB' : '1px solid #E2E8F0',
                   borderRadius: 18,
                   backgroundColor: '#FFFFFF',
                   padding: '24px 22px',
@@ -290,6 +293,7 @@ export const OfferComparison: React.FC = () => {
 
                 <div>
                   <div style={{ textAlign: 'center', marginTop: isBestValue ? 8 : 0, marginBottom: 16 }}>
+                    {isLinkedOffer && <div style={{ color: '#0F766E', fontSize: 11, fontWeight: 700, marginBottom: 6 }}>OFFER FROM YOUR NOTIFICATION</div>}
                     <div style={{ fontSize: 12, color: '#64748B', fontWeight: 500 }}>{offer.demand_title}</div>
                     <div style={{ fontSize: 17, fontWeight: 700, color: '#0F172A', margin: '4px 0' }}>
                       {offer.merchant_name ?? 'Unavailable'}
