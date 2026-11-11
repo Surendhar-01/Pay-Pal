@@ -63,6 +63,19 @@ class Settings(BaseSettings):
         default="qwen3.5:4b",
         description="Ollama model used for AI features",
     )
+    OLLAMA_API_KEY: str = Field(
+        default="",
+        description=(
+            "Optional bearer token for an authenticated Ollama endpoint. Leave empty for "
+            "a trusted network-local Ollama instance that requires no authentication."
+        ),
+    )
+    OLLAMA_HEALTH_TIMEOUT_SECONDS: float = Field(
+        default=2.0,
+        gt=0,
+        le=10,
+        description="Timeout for the Ollama dependency probe used by the health endpoint",
+    )
     OLLAMA_EMBEDDING_BASE_URL: str = Field(
         default="http://localhost:11434",
         description="Ollama API base URL used for demand embeddings",

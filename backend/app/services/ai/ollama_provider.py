@@ -16,6 +16,7 @@ from app.services.ai.base import (
     AIProviderTimeout,
     AIProviderUnavailable,
 )
+from app.services.ai.diagnostics import ollama_request_headers, provider_context
 
 logger = logging.getLogger("markettwin.ai.ollama")
 
@@ -153,21 +154,36 @@ async def _read_response_body(response: httpx.Response) -> bytes:
     return bytes(response_body)
 
 
-def _raise_for_ollama_error(response: httpx.Response, response_body: bytes) -> None:
+def _raise_for_ollama_error(
+    response: httpx.Response,
+    response_body: bytes,
+    settings: Optional[Settings] = None,
+) -> None:
+    context = provider_context(settings) if settings is not None else "provider context unavailable"
     if response.status_code == 404:
-        logger.warning("Ollama returned 404; the configured model may be unavailable.")
+        logger.warning(
+            "Ollama returned 404; the configured model may be unavailable (%s).",
+            context,
+        )
         raise AIProviderUnavailable("The configured AI model is unavailable.")
     if not response.is_error:
         return
 
-    logger.warning("Ollama returned HTTP %s.", response.status_code)
-    try:
-        error_payload = json.loads(response_body)
-        error_message = error_payload.get("error", "")
-    except (json.JSONDecodeError, AttributeError):
-        error_message = ""
+    error_message = ""
+    if response_body.strip():
+        try:
+            error_message = str(json.loads(response_body).get("error", "") or "")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            error_message = ""
 
-    if isinstance(error_message, str) and any(
+    logger.warning(
+        "Ollama returned HTTP %s (%s): %s",
+        response.status_code,
+        context,
+        error_message[:300],
+    )
+
+    if any(
         marker in error_message.casefold()
         for marker in ("unable to allocate", "failed to allocate", "out of memory")
     ):
@@ -306,6 +322,7 @@ Return only the English translation."""
                 async with client.stream(
                     "POST",
                     f"{self._settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                    headers=ollama_request_headers(self._settings),
                     json={
                         "model": self._settings.OLLAMA_MODEL,
                         "messages": [
@@ -325,7 +342,7 @@ Return only the English translation."""
                     },
                 ) as response:
                     response_body = await _read_response_body(response)
-                    _raise_for_ollama_error(response, response_body)
+                    _raise_for_ollama_error(response, response_body, self._settings)
         except httpx.TimeoutException as exc:
             raise AIProviderTimeout("The AI translation provider timed out.") from exc
         except httpx.RequestError as exc:
@@ -404,6 +421,7 @@ Return only the English translation."""
                     async with client.stream(
                         "POST",
                         f"{self._settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                        headers=ollama_request_headers(self._settings),
                         json=request_payload,
                         timeout=timeout,
                     ) as response:
@@ -419,7 +437,7 @@ Return only the English translation."""
                             len(response_body),
                             input_characters,
                         )
-                        _raise_for_ollama_error(response, response_body)
+                        _raise_for_ollama_error(response, response_body, self._settings)
             except httpx.TimeoutException as exc:
                 _log_conversation_failure(
                     self._settings.OLLAMA_MODEL,
@@ -548,6 +566,7 @@ Return only the English translation."""
                 async with client.stream(
                     "POST",
                     f"{self._settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                    headers=ollama_request_headers(self._settings),
                     json={
                         "model": self._settings.OLLAMA_MODEL,
                         "messages": [
@@ -563,7 +582,7 @@ Return only the English translation."""
                     },
                 ) as response:
                     response_body = await _read_response_body(response)
-                    _raise_for_ollama_error(response, response_body)
+                    _raise_for_ollama_error(response, response_body, self._settings)
         except httpx.TimeoutException as exc:
             raise AIProviderTimeout("The AI provider timed out.") from exc
         except httpx.RequestError as exc:
