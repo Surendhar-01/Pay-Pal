@@ -18,17 +18,17 @@ _PROVIDER_PRICE_FIELDS = (
 )
 _COMMERCIAL_REQUIREMENT_KEYS = {
     "price_type": "price_type",
-    "maximum_unit_price": "maximum_target_unit_price",
-    "max_unit_price": "maximum_target_unit_price",
-    "max_budget_unit_price": "maximum_target_unit_price",
-    "maximum_budget_unit_price": "maximum_target_unit_price",
-    "minimum_unit_price": "minimum_target_unit_price",
-    "min_unit_price": "minimum_target_unit_price",
-    "minimum_budget_unit_price": "minimum_target_unit_price",
-    "min_budget_unit_price": "minimum_target_unit_price",
+    "maximum_unit_price": "max_target_unit_price",
+    "max_unit_price": "max_target_unit_price",
+    "max_budget_unit_price": "max_target_unit_price",
+    "maximum_budget_unit_price": "max_target_unit_price",
+    "minimum_unit_price": "min_target_unit_price",
+    "min_unit_price": "min_target_unit_price",
+    "minimum_budget_unit_price": "min_target_unit_price",
+    "min_budget_unit_price": "min_target_unit_price",
     "budget": "budget",
-    "maximum_budget": "maximum_target_unit_price",
-    "minimum_budget": "minimum_target_unit_price",
+    "maximum_budget": "max_target_unit_price",
+    "minimum_budget": "min_target_unit_price",
     "target_unit_price": "target_unit_price",
     "total_budget": "total_budget",
     "quantity": "quantity",
@@ -142,11 +142,13 @@ def normalize_commercial_requirement_fields(value: dict[str, Any]) -> dict[str, 
             if commercial_key == "budget":
                 price_type = str(commercial.get("price_type", "")).casefold()
                 if price_type == "maximum":
-                    commercial_key = "maximum_target_unit_price"
+                    commercial_key = "max_target_unit_price"
                 elif price_type == "minimum":
-                    commercial_key = "minimum_target_unit_price"
+                    commercial_key = "min_target_unit_price"
 
             if commercial_key in {
+                "max_target_unit_price",
+                "min_target_unit_price",
                 "maximum_target_unit_price",
                 "minimum_target_unit_price",
                 "target_unit_price",
@@ -175,6 +177,88 @@ def normalize_commercial_requirement_fields(value: dict[str, Any]) -> dict[str, 
                 commercial.setdefault(commercial_key, str(raw_value).strip())
             requirements.pop(key)
         normalized[requirement_field] = requirements
+
+    normalized["commercial_constraints"] = commercial
+
+    for canonical, aliases in (
+        (
+            "max_target_unit_price",
+            (
+                "maximum_target_unit_price",
+                "maximum_budget",
+                "maximum_unit_price",
+                "max_budget_unit_price",
+                "maximum_budget_unit_price",
+            ),
+        ),
+        (
+            "min_target_unit_price",
+            (
+                "minimum_target_unit_price",
+                "minimum_budget",
+                "minimum_unit_price",
+                "min_budget_unit_price",
+                "minimum_budget_unit_price",
+            ),
+        ),
+    ):
+        present = [
+            (key, commercial[key])
+            for key in (canonical, *aliases)
+            if commercial.get(key) is not None
+        ]
+        if not present:
+            for alias in aliases:
+                commercial.pop(alias, None)
+            continue
+
+        normalized_amounts = [
+            _normalize_price_amount(amount) for _, amount in present
+        ]
+        values = {str(amount) for amount, _ in normalized_amounts}
+        currencies = {
+            currency for _, currency in normalized_amounts if currency is not None
+        }
+        if len(values) > 1 or len(currencies) > 1:
+            commercial.setdefault(
+                "price_clarification",
+                "Conflicting maximum or minimum unit price values were provided.",
+            )
+        selected_amount, selected_currency = normalized_amounts[0]
+        commercial[canonical] = selected_amount
+        if selected_currency and not commercial.get("currency"):
+            commercial["currency"] = selected_currency
+        for alias in aliases:
+            commercial.pop(alias, None)
+
+    if str(commercial.get("price_type", "")).casefold() == "maximum":
+        legacy_budget = commercial.pop("budget", None)
+        if legacy_budget is not None:
+            amount, currency = _normalize_price_amount(legacy_budget)
+            existing = commercial.get("max_target_unit_price")
+            if existing is not None and str(existing) != str(amount):
+                commercial.setdefault(
+                    "price_clarification",
+                    "Conflicting maximum unit price values were provided.",
+                )
+            else:
+                commercial["max_target_unit_price"] = amount
+            if currency and not commercial.get("currency"):
+                commercial["currency"] = currency
+    elif str(commercial.get("price_type", "")).casefold() == "minimum":
+        legacy_budget = commercial.pop("budget", None)
+        if legacy_budget is not None:
+            amount, currency = _normalize_price_amount(legacy_budget)
+            existing = commercial.get("min_target_unit_price")
+            if existing is not None and str(existing) != str(amount):
+                commercial.setdefault(
+                    "price_clarification",
+                    "Conflicting minimum unit price values were provided.",
+                )
+            else:
+                commercial["min_target_unit_price"] = amount
+            if currency and not commercial.get("currency"):
+                commercial["currency"] = currency
 
     normalized["commercial_constraints"] = commercial
     return normalized

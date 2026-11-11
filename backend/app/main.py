@@ -1,4 +1,7 @@
 import logging
+import re
+import time
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -7,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.request_context import request_id_context
 from app.core.exceptions import (
     MarketTwinException,
     generic_exception_handler,
@@ -35,8 +39,18 @@ async def lifespan(app: FastAPI):
     db_status, db_msg = check_supabase_health()
     logger.info(f"Supabase Status: {db_status} ({db_msg})")
     logger.info("=" * 60)
-    yield
-    logger.info(f"Shutting down {settings.PROJECT_NAME}...")
+    if settings.AI_PROVIDER.strip().lower() == "ollama":
+        from app.services.ai.ollama_provider import initialize_ollama_http_client
+
+        initialize_ollama_http_client()
+    try:
+        yield
+    finally:
+        if settings.AI_PROVIDER.strip().lower() == "ollama":
+            from app.services.ai.ollama_provider import close_ollama_http_client
+
+            await close_ollama_http_client()
+        logger.info(f"Shutting down {settings.PROJECT_NAME}...")
 
 
 def create_application() -> FastAPI:
@@ -59,6 +73,53 @@ def create_application() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @application.middleware("http")
+    async def trace_ai_conversation(request, call_next):
+        if not request.url.path.endswith("/ai/conversation"):
+            return await call_next(request)
+
+        supplied_request_id = request.headers.get("X-Request-ID", "")
+        request_id = (
+            supplied_request_id
+            if re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", supplied_request_id)
+            else uuid.uuid4().hex
+        )
+        token = request_id_context.set(request_id)
+        started_at = time.perf_counter()
+        logger.info("AI HTTP request started request_id=%s path=%s", request_id, request.url.path)
+        try:
+            response = await call_next(request)
+        except Exception:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+            trace = getattr(request.state, "ai_trace", {})
+            logger.error(
+                "AI HTTP request failed provider=%s model=%s request_id=%s "
+                "input_characters=%s elapsed_ms=%d",
+                trace.get("provider", "unknown"),
+                trace.get("model", "unknown"),
+                request_id,
+                trace.get("input_characters", "unknown"),
+                elapsed_ms,
+            )
+            raise
+        finally:
+            request_id_context.reset(token)
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        response.headers["X-Request-ID"] = request_id
+        trace = getattr(request.state, "ai_trace", {})
+        logger.info(
+            "AI HTTP response returned provider=%s model=%s request_id=%s "
+            "input_characters=%s status_code=%d elapsed_ms=%d",
+            trace.get("provider", "unknown"),
+            trace.get("model", "unknown"),
+            request_id,
+            trace.get("input_characters", "unknown"),
+            response.status_code,
+            elapsed_ms,
+        )
+        return response
 
     # Register Exception Handlers
     application.add_exception_handler(MarketTwinException, markettwin_exception_handler)

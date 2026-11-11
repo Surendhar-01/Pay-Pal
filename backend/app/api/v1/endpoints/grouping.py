@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.core.security import get_current_user, require_roles
 from app.services.demand_group_merge_service import resolve_group_id, resolve_group_ids
 from app.core.supabase import get_supabase_client
+from app.services.demand_group_submission_service import try_group_new_demand
 
 logger = logging.getLogger("markettwin.api.grouping")
 router = APIRouter()
@@ -17,6 +18,100 @@ async def generate_demand_groups(current_user=Depends(require_roles("admin"))):
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="Legacy demand-group generation is disabled; use the reviewed submission workflow.",
     )
+
+
+@router.post("/admin/demands/{demand_id}/grouping/retry")
+async def retry_reviewed_demand_grouping(
+    demand_id: str,
+    current_user=Depends(require_roles("admin")),
+):
+    client = get_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is not configured.")
+
+    demand_response = (
+        client.table("demands")
+        .select("*")
+        .eq("id", demand_id)
+        .limit(1)
+        .execute()
+    )
+    demand_rows = getattr(demand_response, "data", None)
+    if not isinstance(demand_rows, list) or not demand_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demand not found.")
+    demand = demand_rows[0]
+    if (
+        demand.get("group_id") is not None
+        or demand.get("grouping_status") != "needs_review"
+        or demand.get("status") not in {"Submitted", "Under Review"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only an ungrouped, active demand in needs_review can be retried.",
+        )
+
+    normalized_response = (
+        client.table("demand_normalized_requirements")
+        .select("demand_id")
+        .eq("demand_id", demand_id)
+        .eq("extraction_version", "v1")
+        .limit(1)
+        .execute()
+    )
+    normalized_rows = getattr(normalized_response, "data", None)
+    if not isinstance(normalized_rows, list) or not normalized_rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The existing normalized requirements are unavailable; retry was not started.",
+        )
+
+    for table in (
+        "demand_group_members",
+        "merchant_offers",
+        "customer_offer_selections",
+        "customer_offer_eligibility",
+        "offer_comparison_history",
+        "orders",
+    ):
+        related_response = (
+            client.table(table)
+            .select("id")
+            .eq("demand_id", demand_id)
+            .limit(1)
+            .execute()
+        )
+        related_rows = getattr(related_response, "data", None)
+        if not isinstance(related_rows, list):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Demand grouping eligibility could not be verified.",
+            )
+        if related_rows:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Downstream records exist for this demand; retry was not started.",
+            )
+
+    try:
+        result = await try_group_new_demand(demand, client)
+        diagnostics_response = (
+            client.table("demand_grouping_candidate_diagnostics")
+            .select("candidate_group_id, candidate_demand_ids, cosine_distance, assessment_status, reason_codes, evaluated_at")
+            .eq("demand_id", demand_id)
+            .execute()
+        )
+        diagnostics = getattr(diagnostics_response, "data", None)
+        if not isinstance(diagnostics, list):
+            raise RuntimeError("candidate_diagnostics_read_invalid")
+        return {"demand": result, "candidate_diagnostics": diagnostics}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Reviewed demand grouping retry failed (%s).", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Demand grouping retry could not be completed.",
+        ) from exc
 
 
 @router.get("/admin/demand-groups")

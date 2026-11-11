@@ -1,4 +1,8 @@
+import asyncio
+import asyncio
 import json
+import logging
+import logging
 from typing import Sequence
 
 import httpx
@@ -1276,119 +1280,7 @@ async def test_ollama_provider_sends_configured_model_and_validates_json():
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("language", "language_name"),
-    [("ta-IN", "Tamil"), ("hi-IN", "Hindi")],
-)
-async def test_ollama_translates_requirement_with_dedicated_prompt(language, language_name):
-    calls = []
-
-    async def handle_request(request: httpx.Request) -> httpx.Response:
-        calls.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            json={
-                "message": {
-                    "content": "I need a laptop with 16GB RAM and 512GB SSD. My budget is 80,000 rupees."
-                }
-            },
-        )
-
-    provider = OllamaProvider(
-        Settings(
-            _env_file=None,
-            AI_PROVIDER="ollama",
-            OLLAMA_BASE_URL="http://ollama.test",
-            OLLAMA_MODEL="qwen3-test",
-        ),
-        transport=httpx.MockTransport(handle_request),
-    )
-    result = await provider.translate_requirement(
-        "16GB RAM, 512GB SSD, 80000 rupees",
-        language,
-    )
-
-    assert result == "I need a laptop with 16GB RAM and 512GB SSD. My budget is 80,000 rupees."
-    assert calls[0]["model"] == "qwen3-test"
-    assert calls[0]["stream"] is False
-    assert calls[0]["think"] is False
-    assert calls[0]["messages"][0]["content"] == (
-        "You are a professional multilingual translator for a B2B product marketplace.\n\n"
-        "Translate the provided customer requirement into clear English.\n\n"
-        "Preserve the complete original meaning.\n\n"
-        "Do not summarize, add assumptions, or remove information.\n\n"
-        "Preserve product names, brands, technical specifications, model numbers, quantities, "
-        "numerical values, prices, currencies, and measurement units exactly.\n\n"
-        "Do not convert currencies or change numerical values.\n\n"
-        "If a phrase is ambiguous, preserve its meaning as closely as possible without "
-        "inventing missing information.\n\nReturn only the English translation."
-    )
-    assert language_name in calls[0]["messages"][1]["content"]
-    assert "80000" in calls[0]["messages"][1]["content"]
-
-
-def test_translation_endpoint_returns_english_text_from_configured_ollama(monkeypatch):
-    async def handle_request(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"message": {"content": "I need a laptop with 16GB RAM."}},
-        )
-
-    provider = OllamaProvider(
-        Settings(_env_file=None, AI_PROVIDER="ollama"),
-        transport=httpx.MockTransport(handle_request),
-    )
-    monkeypatch.setattr(ai_endpoint, "create_ai_provider", lambda: provider)
-
-    response = TestClient(app).post(
-        "/api/v1/ai/translate-requirement",
-        json={"text": "எனக்கு 16GB RAM உடன் ஒரு லேப்டாப் வேண்டும்.", "language": "ta-IN"},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"translated_text": "I need a laptop with 16GB RAM."}
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"text": "Need a laptop", "language": "en-IN"},
-        {"text": "", "language": "ta-IN"},
-        {"text": "x" * 2001, "language": "hi-IN"},
-        {"text": "Need a laptop", "language": "ta-IN", "unexpected": True},
-    ],
-)
-def test_translation_endpoint_validates_language_and_text(payload):
-    response = TestClient(app).post(
-        "/api/v1/ai/translate-requirement",
-        json=payload,
-    )
-
-    assert response.status_code == 422
-
-
-def test_translation_endpoint_maps_ollama_timeout_safely(monkeypatch):
-    async def handle_request(_: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("private timeout detail")
-
-    provider = OllamaProvider(
-        Settings(_env_file=None, AI_PROVIDER="ollama"),
-        transport=httpx.MockTransport(handle_request),
-    )
-    monkeypatch.setattr(ai_endpoint, "create_ai_provider", lambda: provider)
-
-    response = TestClient(app).post(
-        "/api/v1/ai/translate-requirement",
-        json={"text": "Need a laptop", "language": "hi-IN"},
-    )
-
-    assert response.status_code == 504
-    assert response.json()["error"] == "Translation took too long. Please retry."
-    assert "private timeout detail" not in response.text
-
-
-@pytest.mark.anyio
-async def test_ollama_invalid_json_raises_controlled_provider_error():
+async def test_ollama_invalid_json_raises_controlled_provider_error(caplog):
     calls = 0
 
     async def handle_request(_: httpx.Request) -> httpx.Response:
@@ -1404,6 +1296,14 @@ async def test_ollama_invalid_json_raises_controlled_provider_error():
     with pytest.raises(AIProviderInvalidResponse):
         await provider.converse("Need a tank", [], RequirementDraft())
     assert calls == 2
+    assert "provider=ollama" in caplog.text
+    assert "failure_category=invalid_response" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert "Need a tank" not in caplog.text
+    assert "provider=ollama" in caplog.text
+    assert "failure_category=invalid_response" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert "Need a tank" not in caplog.text
 
 
 @pytest.mark.anyio
@@ -1658,7 +1558,7 @@ async def test_ollama_empty_response_is_rejected():
 
 
 @pytest.mark.anyio
-async def test_ollama_connection_error_is_reported_as_unavailable():
+async def test_ollama_connection_error_is_reported_as_unavailable(caplog):
     async def handle_request(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("private connection detail")
 
@@ -1669,10 +1569,18 @@ async def test_ollama_connection_error_is_reported_as_unavailable():
 
     with pytest.raises(AIProviderUnavailable):
         await provider.converse("Need a tank", [], RequirementDraft())
+    assert "provider=ollama" in caplog.text
+    assert "model=qwen3.5:4b" in caplog.text
+    assert "failure_category=connection_failure" in caplog.text
+    assert "Need a tank" not in caplog.text
+    assert "provider=ollama" in caplog.text
+    assert "model=qwen3.5:4b" in caplog.text
+    assert "failure_category=connection_failure" in caplog.text
+    assert "Need a tank" not in caplog.text
 
 
 @pytest.mark.anyio
-async def test_ollama_timeout_is_reported_safely():
+async def test_ollama_timeout_is_reported_safely(caplog):
     async def handle_request(_: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("private timeout detail")
 
@@ -1683,6 +1591,220 @@ async def test_ollama_timeout_is_reported_safely():
 
     with pytest.raises(AIProviderTimeout):
         await provider.converse("Need a tank", [], RequirementDraft())
+    assert "failure_category=read_timeout" in caplog.text
+    assert "phase=connection_or_response_headers" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert "Need a tank" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_ollama_connect_timeout_is_distinguished(caplog):
+    async def handle_request(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("private connect timeout")
+
+    provider = OllamaProvider(
+        Settings(_env_file=None),
+        transport=httpx.MockTransport(handle_request),
+    )
+
+    with pytest.raises(AIProviderTimeout):
+        await provider.converse("Need a tank", [], RequirementDraft())
+
+    assert "failure_category=connect_timeout" in caplog.text
+    assert "phase=connection_or_response_headers" in caplog.text
+    assert "private connect timeout" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_ollama_http_client_is_reused_and_closed():
+    from app.services.ai import ollama_provider
+
+    await ollama_provider.close_ollama_http_client()
+    ollama_provider.initialize_ollama_http_client()
+    first = ollama_provider._shared_client()
+    second = ollama_provider._shared_client()
+
+    assert first is second
+    await ollama_provider.close_ollama_http_client()
+    assert first.is_closed
+
+
+@pytest.mark.anyio
+async def test_application_lifespan_manages_ollama_http_client(monkeypatch):
+    import app.main as main_module
+    from app.services.ai import ollama_provider
+
+    monkeypatch.setattr(main_module, "check_supabase_health", lambda: ("ok", "test"))
+    monkeypatch.setattr(main_module.settings, "AI_PROVIDER", "ollama")
+    await ollama_provider.close_ollama_http_client()
+
+    async with main_module.lifespan(app):
+        client = ollama_provider._shared_client()
+        assert not client.is_closed
+
+    assert client.is_closed
+
+
+@pytest.mark.anyio
+async def test_slow_provider_response_within_timeout_keeps_event_loop_responsive():
+    async def handle_request(_: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.04)
+        return httpx.Response(
+            200,
+            json={"message": {"content": json.dumps(_draft_response().model_dump())}},
+        )
+
+    provider = OllamaProvider(
+        Settings(_env_file=None),
+        transport=httpx.MockTransport(handle_request),
+    )
+    ticks = 0
+
+    async def event_loop_ticker():
+        nonlocal ticks
+        for _ in range(5):
+            await asyncio.sleep(0.005)
+            ticks += 1
+
+    response, _ = await asyncio.gather(
+        provider.converse("Need ten tanks", [], RequirementDraft()),
+        event_loop_ticker(),
+    )
+
+    assert response.requirement_draft.mandatory_requirements["material"] == "SS 304"
+    assert ticks == 5
+
+
+@pytest.mark.anyio
+async def test_ollama_timeout_budget_allows_observed_inference_duration():
+    request_timeout = None
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        nonlocal request_timeout
+        request_timeout = request.extensions["timeout"]
+        return httpx.Response(
+            200,
+            json={"message": {"content": json.dumps(_draft_response().model_dump())}},
+        )
+
+    provider = OllamaProvider(
+        Settings(_env_file=None),
+        transport=httpx.MockTransport(handle_request),
+    )
+
+    await provider.converse("Need ten tanks", [], RequirementDraft())
+
+    assert request_timeout is not None
+    assert request_timeout["connect"] == 5.0
+    assert request_timeout["read"] == 480.0
+    assert request_timeout["read"] > 73.0
+    assert "failure_category=read_timeout" in caplog.text
+    assert "phase=connection_or_response_headers" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert "Need a tank" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_ollama_connect_timeout_is_distinguished(caplog):
+    async def handle_request(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("private connect timeout")
+
+    provider = OllamaProvider(
+        Settings(_env_file=None),
+        transport=httpx.MockTransport(handle_request),
+    )
+
+    with pytest.raises(AIProviderTimeout):
+        await provider.converse("Need a tank", [], RequirementDraft())
+
+    assert "failure_category=connect_timeout" in caplog.text
+    assert "phase=connection_or_response_headers" in caplog.text
+    assert "private connect timeout" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_ollama_http_client_is_reused_and_closed():
+    from app.services.ai import ollama_provider
+
+    await ollama_provider.close_ollama_http_client()
+    ollama_provider.initialize_ollama_http_client()
+    first = ollama_provider._shared_client()
+    second = ollama_provider._shared_client()
+
+    assert first is second
+    await ollama_provider.close_ollama_http_client()
+    assert first.is_closed
+
+
+@pytest.mark.anyio
+async def test_application_lifespan_manages_ollama_http_client(monkeypatch):
+    import app.main as main_module
+    from app.services.ai import ollama_provider
+
+    monkeypatch.setattr(main_module, "check_supabase_health", lambda: ("ok", "test"))
+    monkeypatch.setattr(main_module.settings, "AI_PROVIDER", "ollama")
+    await ollama_provider.close_ollama_http_client()
+
+    async with main_module.lifespan(app):
+        client = ollama_provider._shared_client()
+        assert not client.is_closed
+
+    assert client.is_closed
+
+
+@pytest.mark.anyio
+async def test_slow_provider_response_within_timeout_keeps_event_loop_responsive():
+    async def handle_request(_: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.04)
+        return httpx.Response(
+            200,
+            json={"message": {"content": json.dumps(_draft_response().model_dump())}},
+        )
+
+    provider = OllamaProvider(
+        Settings(_env_file=None),
+        transport=httpx.MockTransport(handle_request),
+    )
+    ticks = 0
+
+    async def event_loop_ticker():
+        nonlocal ticks
+        for _ in range(5):
+            await asyncio.sleep(0.005)
+            ticks += 1
+
+    response, _ = await asyncio.gather(
+        provider.converse("Need ten tanks", [], RequirementDraft()),
+        event_loop_ticker(),
+    )
+
+    assert response.requirement_draft.mandatory_requirements["material"] == "SS 304"
+    assert ticks == 5
+
+
+@pytest.mark.anyio
+async def test_ollama_timeout_budget_allows_observed_inference_duration():
+    request_timeout = None
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        nonlocal request_timeout
+        request_timeout = request.extensions["timeout"]
+        return httpx.Response(
+            200,
+            json={"message": {"content": json.dumps(_draft_response().model_dump())}},
+        )
+
+    provider = OllamaProvider(
+        Settings(_env_file=None),
+        transport=httpx.MockTransport(handle_request),
+    )
+
+    await provider.converse("Need ten tanks", [], RequirementDraft())
+
+    assert request_timeout is not None
+    assert request_timeout["connect"] == 5.0
+    assert request_timeout["read"] == 480.0
+    assert request_timeout["read"] > 73.0
 
 
 @pytest.mark.anyio
@@ -1736,7 +1858,7 @@ def test_conversation_endpoint_maps_provider_failures(monkeypatch):
     assert "private timeout detail" not in response.text
 
 
-def test_conversation_endpoint_maps_ollama_body_timeout_after_http_200(monkeypatch):
+def test_conversation_endpoint_maps_ollama_body_timeout_after_http_200(monkeypatch, caplog):
     class TimedOutResponseBody(httpx.AsyncByteStream):
         async def __aiter__(self):
             if False:
@@ -1762,6 +1884,10 @@ def test_conversation_endpoint_maps_ollama_body_timeout_after_http_200(monkeypat
     assert response.status_code == 504
     assert response.json()["error"] == "The AI provider took too long to respond. Please try again."
     assert "private timeout detail" not in response.text
+    assert "failure_category=read_timeout" in caplog.text
+    assert "phase=response_body" in caplog.text
+    assert "failure_category=read_timeout" in caplog.text
+    assert "phase=response_body" in caplog.text
 
 
 def test_conversation_endpoint_maps_invalid_provider_response_safely(monkeypatch):
@@ -1883,8 +2009,6 @@ def test_hair_band_request_preserves_negative_material_preferences_and_budget_ra
         "price_type": "range",
         "is_derived": "false",
         "currency": "INR",
-        "minimum_target_unit_price": "100",
-        "maximum_target_unit_price": "300",
         "quantity": "20",
         "unit": "units",
     }
@@ -1922,8 +2046,6 @@ def test_hair_band_requirements_survive_the_conversation_api(monkeypatch):
         "price_type": "range",
         "is_derived": "false",
         "currency": "INR",
-        "minimum_target_unit_price": "100",
-        "maximum_target_unit_price": "300",
     }
 
 
@@ -2007,16 +2129,6 @@ def test_budget_ranges_modes_and_per_unit_prices(text, expected_price, currency)
         **expected_price,
         "is_derived": "false",
         "currency": currency,
-        **(
-            {"minimum_target_unit_price": expected_price["min_target_unit_price"]}
-            if "min_target_unit_price" in expected_price
-            else {}
-        ),
-        **(
-            {"maximum_target_unit_price": expected_price["max_target_unit_price"]}
-            if "max_target_unit_price" in expected_price
-            else {}
-        ),
     }
 
 

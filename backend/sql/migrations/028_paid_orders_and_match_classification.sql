@@ -15,11 +15,6 @@ $preflight$;
 ALTER TABLE public.orders
     ADD COLUMN IF NOT EXISTS match_classification TEXT;
 
-UPDATE public.orders
-SET match_classification = 'EXACT_MATCH'
-WHERE accepted_terms->>'type' = 'catalogue_purchase'
-  AND match_classification IS NULL;
-
 DO $classification_constraint$
 BEGIN
     IF NOT EXISTS (
@@ -29,7 +24,10 @@ BEGIN
     ) THEN
         ALTER TABLE public.orders
             ADD CONSTRAINT orders_match_classification_valid
-            CHECK (match_classification IS NULL OR match_classification IN ('EXACT_MATCH', 'CLOSEST_ALTERNATIVE'))
+            CHECK (
+                match_classification IS NULL
+                OR match_classification IN ('EXACT_MATCH', 'CLOSEST_ALTERNATIVE')
+            )
             NOT VALID;
         ALTER TABLE public.orders
             VALIDATE CONSTRAINT orders_match_classification_valid;
@@ -48,11 +46,12 @@ BEGIN
             ADD CONSTRAINT orders_catalogue_match_classification_required
             CHECK (
                 accepted_terms->>'type' IS DISTINCT FROM 'catalogue_purchase'
-                OR match_classification IN ('EXACT_MATCH', 'CLOSEST_ALTERNATIVE')
+                OR (
+                    match_classification IS NOT NULL
+                    AND match_classification IN ('EXACT_MATCH', 'CLOSEST_ALTERNATIVE')
+                )
             )
             NOT VALID;
-        ALTER TABLE public.orders
-            VALIDATE CONSTRAINT orders_catalogue_match_classification_required;
     END IF;
 END;
 $catalogue_classification_constraint$;
@@ -107,6 +106,10 @@ BEGIN
     WHERE checkout_idempotency_key = p_idempotency_key
     FOR UPDATE;
     IF FOUND THEN
+        IF v_order.match_classification IS NULL THEN
+            RAISE EXCEPTION 'CHECKOUT_LEGACY_ORDER_CLASSIFICATION_MISSING'
+                USING ERRCODE = 'P0001';
+        END IF;
         IF v_order.customer_id IS DISTINCT FROM p_customer_id
            OR v_order.product_id IS DISTINCT FROM p_product_id
            OR v_order.quantity IS DISTINCT FROM p_quantity
@@ -162,8 +165,6 @@ $function$;
 
 REVOKE ALL ON FUNCTION public.create_catalogue_order_v1(UUID, UUID, TEXT, JSONB, INTEGER, NUMERIC, TEXT, TEXT)
     FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.create_catalogue_order_v1(UUID, UUID, TEXT, JSONB, INTEGER, NUMERIC, TEXT)
-    FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.create_catalogue_order_v1(UUID, UUID, TEXT, JSONB, INTEGER, NUMERIC, TEXT, TEXT)
     TO service_role;
 

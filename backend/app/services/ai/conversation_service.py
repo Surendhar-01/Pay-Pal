@@ -1,4 +1,6 @@
 import re
+import json
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Sequence
 
@@ -8,6 +10,8 @@ from app.schemas.ai import (
     ConversationMessage,
     RequirementDraft,
 )
+from app.core.config import get_settings
+from app.core.request_context import request_id_context
 from app.services.ai.base import AIProvider
 from app.services.ai.price_understanding import (
     SUPPORTED_CURRENCY_CODES,
@@ -1238,14 +1242,6 @@ def _extract_explicit_requirements(
         extracted.commercial_constraints.update(price.values)
         if price.clarification:
             extracted.commercial_constraints["price_clarification"] = price.clarification
-        if "min_target_unit_price" in price.values:
-            extracted.commercial_constraints["minimum_target_unit_price"] = price.values[
-                "min_target_unit_price"
-            ]
-        if "max_target_unit_price" in price.values:
-            extracted.commercial_constraints["maximum_target_unit_price"] = price.values[
-                "max_target_unit_price"
-            ]
         _extract_variety_quantities(text, extracted.commercial_constraints)
 
         location_match = _DELIVERY_LOCATION_PATTERN.search(text)
@@ -1411,7 +1407,6 @@ def _resolve_ambiguous_budget_scope(
     if re.search(r"\b(?:per|for each|each)\s+(?:unit|piece|item)\b", answer_lower):
         amount = commercial.pop("budget")
         commercial["max_target_unit_price"] = amount
-        commercial["maximum_target_unit_price"] = amount
         commercial["price_type"] = "maximum"
     elif re.search(
         r"\b(?:whole order|entire order|total|altogether|in all|overall)\b",
@@ -1561,6 +1556,19 @@ class ConversationService:
 
     async def respond(self, request: AIConversationRequest) -> AIConversationResponse:
         draft = request.requirement_draft or RequirementDraft()
+        settings = get_settings()
+        input_characters = (
+            len(request.message)
+            + sum(len(item.content) for item in request.conversation_history)
+            + len(json.dumps(draft.model_dump(), ensure_ascii=False))
+        )
+        logging.getLogger("markettwin.ai.conversation").info(
+            "AI conversation service started request_id=%s provider=%s model=%s input_characters=%d",
+            request_id_context.get(),
+            settings.AI_PROVIDER,
+            settings.OLLAMA_MODEL if settings.AI_PROVIDER.strip().lower() == "ollama" else "unknown",
+            input_characters,
+        )
         generated = await self._provider.converse(
             request.message,
             request.conversation_history,
@@ -1621,13 +1629,6 @@ class ConversationService:
         ):
             merged_commercial["min_target_unit_price"] = merged_commercial[
                 "minimum_target_unit_price"
-            ]
-        if (
-            "maximum_target_unit_price" in merged_commercial
-            and "max_target_unit_price" not in merged_commercial
-        ):
-            merged_commercial["max_target_unit_price"] = merged_commercial[
-                "maximum_target_unit_price"
             ]
         merged_draft = RequirementDraft.model_validate(merged_values)
         merged_draft = _normalize_purchase_quantity(merged_draft)

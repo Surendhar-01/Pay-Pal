@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from app.services.demand_family_taxonomy import canonical_demand_family
+
 
 MIGRATION = (
     Path(__file__).resolve().parents[1]
@@ -12,6 +14,24 @@ OFFER_SCHEMA_MIGRATION = (
     / "sql"
     / "migrations"
     / "020_merchant_offers_group_id_draft.sql"
+)
+HEADPHONE_ALIAS_MIGRATION = (
+    Path(__file__).resolve().parents[1]
+    / "sql"
+    / "migrations"
+    / "025_wireless_headphone_category_alias_draft.sql"
+)
+GROUPING_RETRY_MIGRATION = (
+    Path(__file__).resolve().parents[1]
+    / "sql"
+    / "migrations"
+    / "026_grouping_retry_safety_draft.sql"
+)
+HP_LAPTOP_ALIAS_MIGRATION = (
+    Path(__file__).resolve().parents[1]
+    / "sql"
+    / "migrations"
+    / "029_hp_laptop_category_alias_draft.sql"
 )
 
 
@@ -43,6 +63,111 @@ def test_candidate_function_is_defined_after_redirect_table():
     assert sql.index("create table if not exists public.demand_group_redirects") < sql.index(
         "create or replace function public.list_demand_group_family_candidates_v1"
     )
+
+
+def test_headphone_category_alias_is_exact_and_reviewed_for_existing_installations():
+    bootstrap_sql = MIGRATION.read_text(encoding="utf-8").lower()
+    forward_sql = " ".join(HEADPHONE_ALIAS_MIGRATION.read_text(encoding="utf-8").lower().split())
+    exact_alias = (
+        "'wireless over ear headphones', 'electronics audio wireless headphones', "
+        "'wireless_headphones', 'wireless_headphones'"
+    )
+
+    assert exact_alias in bootstrap_sql
+    assert exact_alias in forward_sql
+    assert "approval_reference" in forward_sql
+    assert "approved, approved_at" in forward_sql
+    assert "insert into public.demand_group_family_aliases" in forward_sql
+    assert "on conflict (product_name_key, category_path_key) do nothing" in forward_sql
+
+
+def test_hp_laptop_alias_migration_is_idempotent_and_matches_python_taxonomy():
+    sql = " ".join(HP_LAPTOP_ALIAS_MIGRATION.read_text(encoding="utf-8").lower().split())
+    alias = canonical_demand_family("Hp laptop", "Computers")
+
+    assert alias is not None
+    assert alias.product_family_key == "laptop"
+    assert alias.category_key == "computer_laptops"
+    assert "'hp laptop', 'computers', 'laptop', 'computer_laptops'" in sql
+    assert "alias.approved is true" in sql
+    assert "on conflict (product_name_key, category_path_key) do update" in sql
+    assert "where alias.product_family_key = excluded.product_family_key" in sql
+    assert "and alias.category_key = excluded.category_key" in sql
+    assert "approved_at = coalesce(alias.approved_at, excluded.approved_at)" in sql
+    assert "set approved = excluded.approved" in sql
+    assert "notify pgrst, 'reload schema'" in sql
+    assert sql.startswith("-- draft only:")
+    assert sql.endswith("commit;")
+
+
+def test_grouping_retry_migration_persists_diagnostics_and_guards_attachment():
+    sql = GROUPING_RETRY_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "one-shot supabase migration" in sql
+    assert "create table public.demand_grouping_candidate_diagnostics" in sql
+    assert "assessment_status in ('compatible', 'rejected', 'needs_review', 'ineligible')" in sql
+    assert "reason_codes jsonb" in sql
+    assert "existing grouping diagnostics object requires explicit schema review" in sql
+    assert "('orders', 'selection_id')" in sql
+    assert "create trigger guard_demand_group_attachment_v1" in sql
+    assert "old.group_id is null and new.group_id is not null" in sql
+    assert "auth.role() is distinct from 'service_role'" in sql
+    assert "tg_op = 'insert'" in sql
+    assert "before insert or update of group_id on public.demands" in sql
+    assert "member.demand_id = old.id" in sql
+    assert "offer.demand_id = old.id" in sql
+    assert "selection.demand_id = old.id" in sql
+    assert "order_row.demand_id = old.id" in sql
+    assert "does not rewrite existing demand, group, or membership data" in sql
+    assert "revoke all on table public.demand_grouping_candidate_diagnostics from public, anon, authenticated, service_role" in " ".join(sql.split())
+    assert "grant select, insert, update on table public.demand_grouping_candidate_diagnostics to service_role" in " ".join(sql.split())
+    assert "grouping_diagnostics_acl_contract" in sql
+    assert "aclexplode" in sql and "privilege.grantee not in (relation.relowner, v_service_role_oid)" in sql
+    assert "grouping_guard_acl_contract" in sql
+
+
+def test_grouping_retry_migration_fails_closed_on_function_and_trigger_collisions():
+    sql = GROUPING_RETRY_MIGRATION.read_text(encoding="utf-8").lower()
+    preflight_end = sql.index("$grouping_retry_preflight$;", sql.index("do $grouping_retry_preflight$"))
+    preflight = sql[:preflight_end]
+
+    assert "to_regprocedure('public.guard_demand_group_attachment_v1()') is not null" in preflight
+    assert "from pg_trigger as trigger_info" in preflight
+    assert "trigger_info.tgname = 'guard_demand_group_attachment_v1'" in preflight
+    assert preflight_end < sql.index("create function public.guard_demand_group_attachment_v1()")
+    assert preflight_end < sql.index("create trigger guard_demand_group_attachment_v1")
+    assert "create or replace function public.guard_demand_group_attachment_v1()" not in sql
+    assert "drop trigger if exists guard_demand_group_attachment_v1" not in sql
+
+
+def test_grouping_retry_trigger_rejects_grouped_inserts_but_accepts_ungrouped_ones():
+    sql = GROUPING_RETRY_MIGRATION.read_text(encoding="utf-8").lower()
+    function_start = sql.index("create function public.guard_demand_group_attachment_v1()")
+    body_start = sql.index("as $$", function_start) + len("as $$")
+    body_end = sql.index("$$;", body_start)
+    body = sql[body_start:body_end]
+    insert_branch = body.split("if tg_op = 'insert' then", 1)[1].split(
+        "if new.group_id is distinct from old.group_id", 1
+    )[0]
+
+    assert "if new.group_id is not null then" in insert_branch
+    assert "grouped demands must be created ungrouped" in insert_branch
+    assert insert_branch.index("raise exception") < insert_branch.index("return new")
+    assert "new.status::text not in ('submitted', 'under review')" in body
+    assert "new.grouping_status is distinct from 'grouped'" in body
+
+
+def test_grouping_retry_diagnostics_acl_is_exact_and_rls_remains_enabled():
+    sql = " ".join(GROUPING_RETRY_MIGRATION.read_text(encoding="utf-8").lower().split())
+
+    assert "alter table public.demand_grouping_candidate_diagnostics enable row level security" in sql
+    assert "where relation.oid = v_table_oid and relation.relrowsecurity" in sql
+    assert "from pg_policy as policy where policy.polrelid = v_table_oid" in sql
+    assert "privilege.grantor <> relation.relowner" in sql
+    assert "privilege.grantee not in (relation.relowner, v_service_role_oid)" in sql
+    assert "privilege.privilege_type not in ('select', 'insert', 'update')" in sql
+    assert "privilege.is_grantable" in sql
+    assert "and not privilege.is_grantable) <> 3" in sql
 
 
 def test_offer_group_schema_draft_is_nullable_and_references_groups_safely():

@@ -52,6 +52,7 @@ import { profileInitials, useAuth } from '../../context/AuthContext';
 import { env, isSupabaseConfigured } from '../../config/env';
 import RoleSelectionModal from '../common/RoleSelectionModal';
 import type { AuthAction } from '../common/RoleSelectionModal';
+import { fetchNotifications, type NotificationItem } from '../../services/notificationService';
 // mock data removed; notifications are loaded from Supabase when available
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -74,7 +75,7 @@ export const AppLayout: React.FC = () => {
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean | null>(null);
   const [healthData, setHealthData] = useState<HealthResponse | null>(null);
   const [pinging, setPinging] = useState(false);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [authAction, setAuthAction] = useState<AuthAction | null>(null);
   const [roleSelectionOpen, setRoleSelectionOpen] = useState(false);
   const roleNavigationStarted = useRef(false);
@@ -133,6 +134,30 @@ export const AppLayout: React.FC = () => {
     const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (!user || activeRole !== 'customer') {
+      setNotifications([]);
+      return () => { active = false; };
+    }
+
+    const userId = user.id;
+    const loadNotifications = async () => {
+      try {
+        const items = await fetchNotifications(userId);
+        if (active) setNotifications(items);
+      } catch {
+        if (active) setNotifications([]);
+      }
+    };
+    void loadNotifications();
+    const interval = window.setInterval(loadNotifications, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [user?.id, activeRole]);
 
   // Customer Navigation Items
   const customerMenuItems: MenuProps['items'] = [
@@ -271,6 +296,9 @@ export const AppLayout: React.FC = () => {
 
 
   const unreadCount = notifications.filter((n) => n.unread).length;
+  const openNotification = (item: NotificationItem) => {
+    if (item.action_url?.startsWith('/customer/')) navigate(item.action_url);
+  };
 
   const notificationContent = (
     <div style={{ width: 340 }}>
@@ -290,11 +318,13 @@ export const AppLayout: React.FC = () => {
         dataSource={notifications.slice(0, 4)}
         renderItem={(item) => (
           <List.Item
+            onClick={() => openNotification(item)}
             style={{
               padding: '8px 4px',
               backgroundColor: item.unread ? '#F0F7FF' : 'transparent',
               borderRadius: 6,
               marginBottom: 4,
+              cursor: item.action_url ? 'pointer' : 'default',
             }}
           >
             <List.Item.Meta
@@ -311,7 +341,7 @@ export const AppLayout: React.FC = () => {
               description={
                 <div>
                   <div style={{ fontSize: 12, color: '#6B778C' }}>{item.description}</div>
-                  <div style={{ fontSize: 10, color: '#8993A4', marginTop: 2 }}>{item.time}</div>
+                  <div style={{ fontSize: 10, color: '#8993A4', marginTop: 2 }}>{item.created_at}</div>
                 </div>
               }
             />

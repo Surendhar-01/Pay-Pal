@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from app.core.supabase import get_supabase_client, get_supabase_service_client
@@ -175,25 +176,99 @@ def _offer_rpc(name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
     return result.data
 
 
+def _notify_demand_owner_of_offer(offer: Dict[str, Any]) -> None:
+    demand_id = offer.get("demand_id")
+    offer_id = offer.get("id")
+    if not isinstance(demand_id, str) or not demand_id or not isinstance(offer_id, str) or not offer_id:
+        return
+
+    client = get_supabase_service_client()
+    if client is None:
+        logger.warning("Offer %s was saved, but its demand-owner notification could not be created.", offer_id)
+        return
+
+    try:
+        demand_result = (
+            client.table("demands")
+            .select("customer_id,title")
+            .eq("id", demand_id)
+            .limit(1)
+            .execute()
+        )
+        demand_rows = demand_result.data or []
+        demand = demand_rows[0] if isinstance(demand_rows, list) and demand_rows else None
+        if not isinstance(demand, dict):
+            logger.warning("Offer %s references demand %s that could not be loaded.", offer_id, demand_id)
+            return
+
+        customer_id = demand.get("customer_id")
+        demand_title = demand.get("title")
+        if (
+            not isinstance(customer_id, str)
+            or not customer_id
+            or customer_id == offer.get("merchant_id")
+            or not isinstance(demand_title, str)
+            or not demand_title.strip()
+        ):
+            logger.warning("Offer %s has no valid customer demand owner.", offer_id)
+            return
+
+        action_url = "/customer/compare?" + urlencode({"demand": demand_id, "offer": offer_id})
+        existing_result = (
+            client.table("notifications")
+            .select("id")
+            .eq("user_id", customer_id)
+            .eq("type", "offer")
+            .eq("action_url", action_url)
+            .limit(1)
+            .execute()
+        )
+        existing_rows = existing_result.data or []
+        if existing_rows:
+            return
+
+        client.table("notifications").insert({
+            "user_id": customer_id,
+            "title": "New product available for your demand",
+            "description": (
+                f"A merchant has submitted a new product for your {demand_title.strip()} demand. "
+                "Review the offer details."
+            ),
+            "type": "offer",
+            "unread": True,
+            "action_url": action_url,
+        }).execute()
+    except Exception:
+        logger.warning(
+            "Offer %s was saved, but its demand-owner notification could not be created.",
+            offer_id,
+            exc_info=True,
+        )
+
+
 def submit_offer(merchant_id: str, group_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     request = OfferSubmitRequest.model_validate(payload)
-    return _offer_rpc("submit_merchant_offer_v1", {
+    offer = _offer_rpc("submit_merchant_offer_v1", {
         "p_merchant_id": merchant_id,
         "p_group_id": group_id,
         "p_offer_code": f"OFF-{uuid4().hex.upper()}",
         "p_terms": request.model_dump(mode="json"),
     })
+    _notify_demand_owner_of_offer(offer)
+    return offer
 
 
 def submit_demand_offer(merchant_id: str, demand_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Submit an offer against a single active customer demand."""
     request = OfferSubmitRequest.model_validate(payload)
-    return _offer_rpc("submit_merchant_demand_offer_v1", {
+    offer = _offer_rpc("submit_merchant_demand_offer_v1", {
         "p_merchant_id": merchant_id,
         "p_demand_id": demand_id,
         "p_offer_code": f"OFF-{uuid4().hex.upper()}",
         "p_terms": request.model_dump(mode="json"),
     })
+    _notify_demand_owner_of_offer(offer)
+    return offer
 
 
 def revise_offer(merchant_id: str, offer_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:

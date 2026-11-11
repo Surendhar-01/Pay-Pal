@@ -1,6 +1,17 @@
 import { supabase } from './supabase';
 
-export const fetchNotifications = async (userId: string) => {
+export interface NotificationItem {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  type: 'demand' | 'offer' | 'order' | 'system';
+  unread: boolean;
+  action_url: string | null;
+  created_at: string;
+}
+
+export const fetchNotifications = async (userId: string): Promise<NotificationItem[]> => {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('notifications')
