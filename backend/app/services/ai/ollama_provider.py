@@ -1,11 +1,14 @@
+from contextlib import asynccontextmanager
 import json
 import logging
-from typing import Optional, Sequence
+import time
+from typing import AsyncIterator, Optional, Sequence
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import Settings, get_settings
+from app.core.request_context import request_id_context
 from app.schemas.ai import AIProviderResponse, ConversationMessage, RequirementDraft
 from app.services.ai.base import (
     AIProviderInvalidResponse,
@@ -16,8 +19,86 @@ from app.services.ai.base import (
 
 logger = logging.getLogger("markettwin.ai.ollama")
 
-_REQUEST_TIMEOUT_SECONDS = 250.0
+_REQUEST_TIMEOUT_SECONDS = 480.0
 _CONNECT_TIMEOUT_SECONDS = 5.0
+_shared_http_client: Optional[httpx.AsyncClient] = None
+
+
+def initialize_ollama_http_client() -> None:
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        _shared_http_client = httpx.AsyncClient()
+
+
+async def close_ollama_http_client() -> None:
+    global _shared_http_client
+    client, _shared_http_client = _shared_http_client, None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+def _shared_client() -> httpx.AsyncClient:
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        initialize_ollama_http_client()
+    assert _shared_http_client is not None
+    return _shared_http_client
+
+
+@asynccontextmanager
+async def _request_client(
+    transport: Optional[httpx.AsyncBaseTransport],
+) -> AsyncIterator[httpx.AsyncClient]:
+    if transport is not None:
+        async with httpx.AsyncClient(transport=transport) as client:
+            yield client
+        return
+    yield _shared_client()
+
+
+def _timeout_failure_category(error: httpx.TimeoutException) -> str:
+    if isinstance(error, httpx.ConnectTimeout):
+        return "connect_timeout"
+    if isinstance(error, httpx.ReadTimeout):
+        return "read_timeout"
+    if isinstance(error, httpx.WriteTimeout):
+        return "write_timeout"
+    if isinstance(error, httpx.PoolTimeout):
+        return "pool_timeout"
+    return "provider_timeout"
+
+
+def _log_conversation_failure(
+    model: str,
+    started_at: float,
+    failure_category: str,
+    phase: str,
+    attempt: int,
+    input_characters: int,
+) -> None:
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    request_id = request_id_context.get()
+    logger.warning(
+        "AI provider failure provider=ollama model=%s request_id=%s elapsed_ms=%d "
+        "failure_category=%s phase=%s attempt=%d input_characters=%d",
+        model,
+        request_id,
+        elapsed_ms,
+        failure_category,
+        phase,
+        attempt,
+        input_characters,
+        extra={
+            "ai_provider": "ollama",
+            "ai_model": model,
+            "request_id": request_id,
+            "elapsed_ms": elapsed_ms,
+            "failure_category": failure_category,
+            "phase": phase,
+            "attempt": attempt,
+            "input_characters": input_characters,
+        },
+    )
+_TRANSLATION_TIMEOUT_SECONDS = 120.0
 _MATCH_EXPLANATION_TIMEOUT_SECONDS = 3.0
 _MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024
 _MAX_STRUCTURED_RESPONSE_ATTEMPTS = 2
@@ -193,12 +274,87 @@ class OllamaProvider:
         self._settings = settings or get_settings()
         self._transport = transport
 
+    async def translate_requirement(self, text: str, language: str) -> str:
+        system_prompt = """You are a professional multilingual translator for a B2B product marketplace.
+
+Translate the provided customer requirement into clear English.
+
+Preserve the complete original meaning.
+
+Do not summarize, add assumptions, or remove information.
+
+Preserve product names, brands, technical specifications, model numbers, quantities, numerical values, prices, currencies, and measurement units exactly.
+
+Do not convert currencies or change numerical values.
+
+If a phrase is ambiguous, preserve its meaning as closely as possible without inventing missing information.
+
+Return only the English translation."""
+        language_names = {"ta-IN": "Tamil", "hi-IN": "Hindi"}
+        language_name = language_names.get(language)
+        if not language_name:
+            raise ValueError("Only Tamil and Hindi requirements need translation.")
+        timeout = httpx.Timeout(
+            _TRANSLATION_TIMEOUT_SECONDS,
+            connect=_CONNECT_TIMEOUT_SECONDS,
+        )
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                transport=self._transport,
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                    json={
+                        "model": self._settings.OLLAMA_MODEL,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Input language: {language_name} ({language}).\n"
+                                    "Translate this customer requirement:\n"
+                                    f"{text}"
+                                ),
+                            },
+                        ],
+                        "stream": False,
+                        "think": False,
+                        "options": {"temperature": 0.1},
+                    },
+                ) as response:
+                    response_body = await _read_response_body(response)
+                    _raise_for_ollama_error(response, response_body)
+        except httpx.TimeoutException as exc:
+            raise AIProviderTimeout("The AI translation provider timed out.") from exc
+        except httpx.RequestError as exc:
+            raise AIProviderUnavailable("The AI translation provider is unavailable.") from exc
+
+        try:
+            payload = json.loads(response_body)
+            content = payload["message"]["content"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.warning("Ollama returned an invalid requirement translation response.")
+            raise AIProviderInvalidResponse(
+                "The AI provider returned an invalid translation response.",
+                public_message="The requirement could not be translated. Please retry.",
+            ) from exc
+        if not isinstance(content, str) or not content.strip() or len(content) > 4000:
+            logger.warning("Ollama returned an empty or oversized requirement translation.")
+            raise AIProviderInvalidResponse(
+                "The AI provider returned an invalid translation response.",
+                public_message="The requirement could not be translated. Please retry.",
+            )
+        return content.strip()
+
     async def converse(
         self,
         message: str,
         history: Sequence[ConversationMessage],
         requirement_draft: RequirementDraft,
     ) -> AIProviderResponse:
+        started_at = time.perf_counter()
         ollama_messages = [
             {
                 "role": "system",
@@ -216,35 +372,104 @@ class OllamaProvider:
             ),
             {"role": "user", "content": message},
         ]
+        input_characters = sum(len(item["content"]) for item in ollama_messages)
         timeout = httpx.Timeout(
             _REQUEST_TIMEOUT_SECONDS,
             connect=_CONNECT_TIMEOUT_SECONDS,
         )
 
         for attempt in range(_MAX_STRUCTURED_RESPONSE_ATTEMPTS):
+            attempt_started_at = time.perf_counter()
+            phase = "connection_or_response_headers"
+            request_payload = {
+                "model": self._settings.OLLAMA_MODEL,
+                "messages": ollama_messages,
+                "format": AIProviderResponse.model_json_schema(),
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0.1},
+            }
+            logger.info(
+                "Ollama request started provider=ollama model=%s request_id=%s attempt=%d "
+                "message_count=%d input_characters=%d payload_characters=%d stream=false",
+                self._settings.OLLAMA_MODEL,
+                request_id_context.get(),
+                attempt + 1,
+                len(ollama_messages),
+                input_characters,
+                len(json.dumps(request_payload, ensure_ascii=False)),
+            )
             try:
-                async with httpx.AsyncClient(
-                    timeout=timeout,
-                    transport=self._transport,
-                ) as client:
+                async with _request_client(self._transport) as client:
                     async with client.stream(
                         "POST",
                         f"{self._settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-                        json={
-                            "model": self._settings.OLLAMA_MODEL,
-                            "messages": ollama_messages,
-                            "format": AIProviderResponse.model_json_schema(),
-                            "stream": False,
-                            "think": False,
-                            "options": {"temperature": 0.1},
-                        },
+                        json=request_payload,
+                        timeout=timeout,
                     ) as response:
+                        phase = "response_body"
                         response_body = await _read_response_body(response)
+                        logger.info(
+                            "Ollama response received provider=ollama model=%s request_id=%s "
+                            "elapsed_ms=%d status_code=%d response_bytes=%d input_characters=%d",
+                            self._settings.OLLAMA_MODEL,
+                            request_id_context.get(),
+                            round((time.perf_counter() - attempt_started_at) * 1000),
+                            response.status_code,
+                            len(response_body),
+                            input_characters,
+                        )
                         _raise_for_ollama_error(response, response_body)
             except httpx.TimeoutException as exc:
+                _log_conversation_failure(
+                    self._settings.OLLAMA_MODEL,
+                    attempt_started_at,
+                    _timeout_failure_category(exc),
+                    phase,
+                    attempt + 1,
+                    input_characters,
+                )
                 raise AIProviderTimeout("The AI provider timed out.") from exc
             except httpx.RequestError as exc:
+                _log_conversation_failure(
+                    self._settings.OLLAMA_MODEL,
+                    attempt_started_at,
+                    "connection_failure",
+                    phase,
+                    attempt + 1,
+                    input_characters,
+                )
                 raise AIProviderUnavailable("The AI provider is unavailable.") from exc
+            except AIProviderResourceError:
+                _log_conversation_failure(
+                    self._settings.OLLAMA_MODEL,
+                    attempt_started_at,
+                    "provider_resource_error",
+                    phase,
+                    attempt + 1,
+                    input_characters,
+                )
+                raise
+            except AIProviderUnavailable:
+                _log_conversation_failure(
+                    self._settings.OLLAMA_MODEL,
+                    attempt_started_at,
+                    "provider_unavailable",
+                    phase,
+                    attempt + 1,
+                    input_characters,
+                )
+                raise
+            except AIProviderInvalidResponse:
+                _log_conversation_failure(
+                    self._settings.OLLAMA_MODEL,
+                    attempt_started_at,
+                    "invalid_response",
+                    phase,
+                    attempt + 1,
+                    input_characters,
+                )
+                raise
 
             validation_details: list[str] = []
             try:
@@ -266,11 +491,24 @@ class OllamaProvider:
                     failure = "missing expected response field"
                 else:
                     failure = "empty or invalid structured content"
+                elapsed_ms = round((time.perf_counter() - started_at) * 1000)
                 logger.warning(
-                    "Ollama returned invalid structured response (attempt %s/%s; %s).",
+                    "Ollama returned invalid structured response (provider=ollama model=%s attempt=%s/%s "
+                    "elapsed_ms=%s failure_category=invalid_response; %s).",
+                    self._settings.OLLAMA_MODEL,
                     attempt + 1,
                     _MAX_STRUCTURED_RESPONSE_ATTEMPTS,
+                    elapsed_ms,
                     failure,
+                    extra={
+                        "ai_provider": "ollama",
+                        "ai_model": self._settings.OLLAMA_MODEL,
+                        "elapsed_ms": elapsed_ms,
+                        "failure_category": "invalid_response",
+                        "phase": "response_validation",
+                        "attempt": attempt + 1,
+                        "input_characters": input_characters,
+                    },
                 )
                 if attempt + 1 == _MAX_STRUCTURED_RESPONSE_ATTEMPTS:
                     safe_details = "; ".join(validation_details)[:500]

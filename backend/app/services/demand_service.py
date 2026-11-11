@@ -158,7 +158,7 @@ def list_demands(customer_id: str, page: int = 1, page_size: int = 20, status: O
     query = (
         client.table("demands")
         .select(
-            "*,demand_groups(group_reference,participating_demand_count,participants_count)",
+            "*,demand_groups!demands_group_id_fkey(group_reference,participating_demand_count,participants_count)",
             count="exact",
         )
         .eq("customer_id", customer_id)

@@ -414,22 +414,42 @@ def test_list_demands_scopes_results_to_authenticated_customer(monkeypatch):
     class OwnerScopedQuery:
         def __init__(self):
             self.filters = []
+            self.selection = None
+            self.select_options = None
+            self.ordering = None
+            self.page_range = None
 
-        def select(self, *_args, **_kwargs):
+        def select(self, selection, **kwargs):
+            self.selection = selection
+            self.select_options = kwargs
             return self
 
         def eq(self, column, value):
             self.filters.append((column, value))
             return self
 
-        def order(self, *_args, **_kwargs):
+        def order(self, column, desc=False):
+            self.ordering = (column, desc)
             return self
 
-        def range(self, *_args, **_kwargs):
+        def range(self, start, end):
+            self.page_range = (start, end)
             return self
 
         def execute(self):
-            return Result([{"id": "demand-1", "customer_id": "customer-1"}])
+            return Result([
+                {
+                    "id": "demand-1",
+                    "customer_id": "customer-1",
+                    "group_id": "group-1",
+                    "demand_groups": {
+                        "group_reference": "GRP-123",
+                        "participating_demand_count": 4,
+                        "participants_count": 3,
+                    },
+                },
+                {"id": "demand-2", "customer_id": "customer-1", "group_id": None, "demand_groups": None},
+            ])
 
     class OwnerScopedClient:
         def __init__(self):
@@ -441,11 +461,18 @@ def test_list_demands_scopes_results_to_authenticated_customer(monkeypatch):
     client = OwnerScopedClient()
     monkeypatch.setattr(demand_service, "_client", lambda: client)
 
-    items, total = demand_service.list_demands("customer-1")
+    items, total = demand_service.list_demands("customer-1", page=2, page_size=2)
 
-    assert total == 1
+    assert total == 2
     assert items[0]["customer_id"] == "customer-1"
+    assert items[0]["demand_groups"]["group_reference"] == "GRP-123"
+    assert items[1]["group_id"] is None
+    assert items[1]["demand_groups"] is None
     assert client.query.filters == [("customer_id", "customer-1")]
+    assert client.query.selection == "*,demand_groups!demands_group_id_fkey(group_reference,participating_demand_count,participants_count)"
+    assert client.query.select_options == {"count": "exact"}
+    assert client.query.ordering == ("created_at", True)
+    assert client.query.page_range == (2, 3)
 
 
 def test_analysis_fetches_all_pages_and_rejects_truncated_pages(monkeypatch):

@@ -2,6 +2,7 @@ import { axiosClient } from './axiosClient';
 import type { MatchedProduct, RequirementDraft } from './aiApi';
 
 export const CHECKOUT_CONTEXT_KEY = 'markettwin_paypal_checkout_context_v1';
+const CATALOGUE_CHECKOUT_TIMEOUT_MS = 90000;
 
 export interface CheckoutContext {
   productId: string;
@@ -92,7 +93,7 @@ export const quoteCatalogueCheckout = async (
     quantity,
     requirements: context.requirements,
     match_classification: context.matchClassification || 'EXACT_MATCH',
-  }, { timeout: 90000 });
+  }, { timeout: CATALOGUE_CHECKOUT_TIMEOUT_MS });
   return data;
 };
 
@@ -106,7 +107,7 @@ export const createCatalogueCheckout = async (
     requirements: context.requirements,
     idempotency_key: context.idempotencyKey,
     match_classification: context.matchClassification || 'EXACT_MATCH',
-  });
+  }, { timeout: CATALOGUE_CHECKOUT_TIMEOUT_MS });
   return data;
 };
 

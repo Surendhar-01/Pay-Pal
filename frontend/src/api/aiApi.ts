@@ -91,12 +91,54 @@ export interface ProductMatchingResponse {
 export const sendAIConversationMessage = async (
   payload: AIConversationPayload
 ): Promise<AIConversationResponse> => {
-  const response = await axiosClient.post<AIConversationResponse>(
-    '/api/v1/ai/conversation',
-    payload,
-    { timeout: 520000 }
+  const requestId = globalThis.crypto?.randomUUID?.()
+    ?? `ai-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const startedAt = performance.now();
+  const inputCharacters = payload.message.length
+    + payload.conversation_history.reduce((total, item) => total + item.content.length, 0)
+    + JSON.stringify(payload.requirement_draft ?? {}).length;
+  const timeoutMs = 520000;
+  const diagnostics = {
+    request_id: requestId,
+    provider: 'server-configured',
+    model: 'server-configured',
+    input_characters: inputCharacters,
+    history_messages: payload.conversation_history.length,
+    timeout_ms: timeoutMs,
+  };
+
+  console.info('[MarketTwin AI] request started', diagnostics);
+  try {
+    const response = await axiosClient.post<AIConversationResponse>(
+      '/api/v1/ai/conversation',
+      payload,
+      { timeout: timeoutMs, headers: { 'X-Request-ID': requestId } }
+    );
+    return response.data;
+  } catch (error) {
+    const originalError = (error as Error & {
+      originalError?: { code?: string; response?: { status?: number } };
+    }).originalError;
+    console.warn('[MarketTwin AI] request failed', {
+      ...diagnostics,
+      elapsed_ms: Math.round(performance.now() - startedAt),
+      status_code: originalError?.response?.status,
+      error_code: originalError?.code,
+    });
+    throw error;
+  }
+};
+
+export const translateRequirementText = async (
+  text: string,
+  language: 'ta-IN' | 'hi-IN'
+): Promise<string> => {
+  const response = await axiosClient.post<{ translated_text: string }>(
+    '/api/v1/ai/translate-requirement',
+    { text, language },
+    { timeout: 150000 }
   );
-  return response.data;
+  return response.data.translated_text;
 };
 
 export const matchProductsToRequirements = async (

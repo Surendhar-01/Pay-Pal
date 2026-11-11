@@ -694,7 +694,7 @@ def test_live_api_shaped_xps_records_are_matched_by_specifications_not_ids():
     excluded = {product.product_id: product for product in response.excluded_products}
     assert {"LAPTOP-109", "LAPTOP-110", "LAPTOP-107"} <= excluded.keys()
     assert any(
-        item.attribute == "budget" and item.state == "FAIL"
+        item.attribute == "max_target_unit_price" and item.state == "FAIL"
         for item in excluded["LAPTOP-109"].mandatory_results
     )
     assert any(
@@ -862,7 +862,7 @@ def test_missing_catalogue_price_currency_cannot_verify_currency_bound_budget():
     budget = next(
         item
         for item in excluded.mandatory_results
-        if item.attribute == "budget"
+        if item.attribute == "max_target_unit_price"
     )
     assert budget.state == "UNKNOWN"
     assert response.near_matches == []

@@ -1218,17 +1218,18 @@ def _evaluate_structured_prices(
         constraints.get("min_target_unit_price")
         or constraints.get("minimum_target_unit_price")
     )
-    maximum = _decimal_amount(
-        constraints.get("max_target_unit_price")
-        or constraints.get("maximum_target_unit_price")
+    maximum_raw = constraints.get(
+        "max_target_unit_price",
+        constraints.get("maximum_target_unit_price"),
+    )
+    maximum_requested = any(
+        key in constraints
+        for key in ("max_target_unit_price", "maximum_target_unit_price")
     )
     target = _decimal_amount(constraints.get("target_unit_price"))
     total_budget = _decimal_amount(constraints.get("total_budget"))
     required_currency = constraints.get("currency")
-    actual_price_raw = _effective_price(record)
-    actual_price = (
-        Decimal(str(actual_price_raw)) if actual_price_raw is not None else None
-    )
+    actual_price = _effective_price_decimal(record)
     actual_currency = _catalogue_currency(record)
 
     def evaluation(
@@ -1280,8 +1281,15 @@ def _evaluate_structured_prices(
 
     if minimum is not None:
         mandatory.append(evaluation("min_target_unit_price", minimum, actual_price))
-    if maximum is not None:
-        mandatory.append(evaluation("max_target_unit_price", maximum, actual_price))
+    if maximum_requested:
+        mandatory.append(
+            _verify_maximum_budget(
+                record,
+                maximum_raw,
+                required_currency,
+                price_clarification=constraints.get("price_clarification"),
+            )
+        )
     if total_budget is not None:
         quantity = _decimal_amount(constraints.get("quantity"))
         total_cost = (
@@ -1346,6 +1354,17 @@ def _evaluate_budget(
     requirement: NumericRequirement,
     required_currency: Optional[str] = None,
 ) -> ConstraintEvaluation:
+    if (
+        requirement.upper is not None
+        and requirement.lower is None
+        and requirement.exact is None
+    ):
+        return _verify_maximum_budget(
+            record,
+            requirement.upper.value,
+            required_currency,
+        )
+
     price = _effective_price(record)
     catalogue_currency = _catalogue_currency(record)
     if price is None:
@@ -1380,6 +1399,53 @@ def _evaluate_budget(
             else "effective catalogue price: not provided",
             f"catalogue currency: {catalogue_currency or 'not provided'}",
             f"requested currency: {required_currency or 'not provided'}",
+        ],
+    )
+
+
+def _verify_maximum_budget(
+    record: CatalogueProduct,
+    requested_value: Any,
+    requested_currency: Optional[str],
+    *,
+    price_clarification: Optional[str] = None,
+) -> ConstraintEvaluation:
+    expected = _decimal_amount(str(requested_value)) if requested_value is not None else None
+    effective_price = _effective_price_decimal(record)
+    product_currency = _catalogue_currency(record)
+
+    if price_clarification:
+        state = "UNKNOWN"
+        reason = price_clarification
+    elif expected is None:
+        state = "UNKNOWN"
+        reason = "The maximum unit price is missing or is not a usable positive amount."
+    elif effective_price is None:
+        state = "UNKNOWN"
+        reason = "The catalogue does not specify a usable effective selling price."
+    elif not requested_currency or not product_currency:
+        state = "UNKNOWN"
+        reason = "The requested or catalogue currency is missing, so prices cannot be compared safely."
+    elif requested_currency.strip().casefold() != product_currency.casefold():
+        state = "UNKNOWN"
+        reason = "The catalogue price uses a different currency and no conversion is available."
+    elif effective_price <= expected:
+        state = "PASS"
+        reason = "The effective catalogue unit price is at or below the maximum unit price."
+    else:
+        state = "FAIL"
+        reason = "The effective catalogue unit price exceeds the maximum unit price."
+
+    return ConstraintEvaluation(
+        source="commercial_constraints",
+        attribute="max_target_unit_price",
+        requirement=format(expected, "f") if expected is not None else str(requested_value or ""),
+        state=state,
+        reason=reason,
+        evidence=[
+            f"effective catalogue unit price: {effective_price if effective_price is not None else 'not provided'}",
+            f"catalogue currency: {product_currency or 'not provided'}",
+            f"requested currency: {requested_currency or 'not provided'}",
         ],
     )
 
@@ -1464,12 +1530,26 @@ def _parse_quantity(value: Optional[str]) -> Optional[float]:
     return quantity if quantity > 0 else None
 
 
-def _effective_price(record: CatalogueProduct) -> Optional[float]:
-    regular = record.price
-    discount = record.discount_price
-    if discount is not None and discount > 0 and (regular is None or discount < regular):
+def _effective_price_decimal(record: CatalogueProduct) -> Optional[Decimal]:
+    def valid_price(value: Optional[float]) -> Optional[Decimal]:
+        if value is None:
+            return None
+        try:
+            price = Decimal(str(value))
+        except InvalidOperation:
+            return None
+        return price if price.is_finite() and price > 0 else None
+
+    regular = valid_price(record.price)
+    discount = valid_price(record.discount_price)
+    if discount is not None and (regular is None or discount < regular):
         return discount
     return regular
+
+
+def _effective_price(record: CatalogueProduct) -> Optional[float]:
+    price = _effective_price_decimal(record)
+    return float(price) if price is not None else None
 
 
 def _rating_evidence(record: CatalogueProduct) -> tuple[Optional[float], Optional[float]]:
@@ -1575,7 +1655,11 @@ def _rank_candidates(candidates: list[_Candidate], draft: RequirementDraft) -> N
         confidence_score = candidate.rating_confidence or 0.0
         price = _effective_price(candidate.record)
         budget_result = next(
-            (result for result in checked if result.attribute == "budget"),
+            (
+                result
+                for result in checked
+                if result.attribute in {"budget", "max_target_unit_price"}
+            ),
             None,
         )
         if target_price is not None:

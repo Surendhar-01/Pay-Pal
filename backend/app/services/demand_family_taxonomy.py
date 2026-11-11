@@ -14,6 +14,7 @@ def _alias_key(value: str) -> str:
 
 
 _APPROVED_ALIASES = {
+    ("hp laptop", "computers"): CanonicalDemandFamily("laptop", "computer_laptops"),
     ("reliable laptop", "computers"): CanonicalDemandFamily("laptop", "computer_laptops"),
     ("laptop suitable", "computers"): CanonicalDemandFamily("laptop", "computer_laptops"),
     ("samsung 5g smartphone", "mobile phones"): CanonicalDemandFamily("samsung_smartphone", "samsung_mobile_phones"),
@@ -22,6 +23,10 @@ _APPROVED_ALIASES = {
         "electronics mobile phones samsung smartphones",
     ): CanonicalDemandFamily("samsung_smartphone", "samsung_mobile_phones"),
     ("wireless over ear headphones", "electronics"): CanonicalDemandFamily("wireless_headphones", "wireless_headphones"),
+    (
+        "wireless over ear headphones",
+        "electronics audio wireless headphones",
+    ): CanonicalDemandFamily("wireless_headphones", "wireless_headphones"),
     (
         "affordable wireless over ear headphones",
         "electronics audio wireless headphones",

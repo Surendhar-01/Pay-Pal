@@ -72,3 +72,72 @@ def test_list_demands_requires_auth():
     client = TestClient(app)
     response = client.get("/api/v1/customer/demands")
     assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_customer_demand_list_maps_grouped_and_ungrouped_rows(monkeypatch):
+    calls = []
+    rows = [
+        {
+            "id": "demand-1",
+            "customer_id": "customer-1",
+            "title": "Grouped laptop",
+            "target_quantity": 2,
+            "group_id": "group-1",
+            "demand_groups": {
+                "group_reference": "GRP-123",
+                "participating_demand_count": 4,
+                "participants_count": 3,
+            },
+        },
+        {
+            "id": "demand-2",
+            "customer_id": "customer-1",
+            "title": "Standalone laptop",
+            "target_quantity": 1,
+            "group_id": None,
+            "demand_groups": None,
+        },
+    ]
+
+    def list_customer_rows(customer_id, **kwargs):
+        calls.append((customer_id, kwargs))
+        return rows, len(rows)
+
+    monkeypatch.setattr(demands_endpoint, "list_demands", list_customer_rows)
+
+    result = await demands_endpoint.get_customer_demands(
+        page=2,
+        page_size=1,
+        status_filter=None,
+        search=None,
+        current_user={"id": "customer-1"},
+    )
+
+    assert calls == [("customer-1", {"page": 2, "page_size": 1, "status": None, "search": None})]
+    assert result.total == 2
+    assert result.page == 2
+    assert result.page_size == 1
+    assert result.items[0].group_reference == "GRP-123"
+    assert result.items[0].participating_demand_count == 4
+    assert result.items[0].participants_count == 3
+    assert result.items[1].group_id is None
+    assert result.items[1].group_reference is None
+    assert result.items[1].participating_demand_count is None
+    assert result.items[1].participants_count is None
+
+
+@pytest.mark.anyio
+async def test_customer_demand_list_keeps_service_failures_as_503(monkeypatch):
+    def fail_list(*_args, **_kwargs):
+        raise RuntimeError("PostgREST relationship query failed")
+
+    monkeypatch.setattr(demands_endpoint, "list_demands", fail_list)
+
+    with pytest.raises(HTTPException) as error:
+        await demands_endpoint.get_customer_demands(
+            current_user={"id": "customer-1"},
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Your demands are temporarily unavailable."
