@@ -48,19 +48,7 @@ import MyOffers from '../pages/merchant/MyOffers';
 import MerchantOrders from '../pages/merchant/MerchantOrders';
 import MerchantProfile from '../pages/merchant/MerchantProfile';
 
-// Admin Module
-import AdminDashboard from '../pages/admin/AdminDashboard';
-import AdminProfile from '../pages/admin/AdminProfile';
-import CustomerManagement from '../pages/admin/CustomerManagement';
-import MerchantManagement from '../pages/admin/MerchantManagement';
-import ProductManagement from '../pages/admin/ProductManagement';
-import DemandManagement from '../pages/admin/DemandManagement';
-import DemandGroupManagement from '../pages/admin/DemandGroupManagement';
-import OfferManagement from '../pages/admin/OfferManagement';
-import OrderManagement from '../pages/admin/OrderManagement';
-import ReportsAnalytics from '../pages/admin/ReportsAnalytics';
-
-const C = (node: React.ReactNode, roles?: Array<'customer' | 'merchant' | 'admin'>) => (
+const C = (node: React.ReactNode, roles?: Array<'customer' | 'merchant'>) => (
   <ProtectedRoute allowedRoles={roles}>{node}</ProtectedRoute>
 );
 
@@ -99,19 +87,6 @@ export const router = createBrowserRouter([
       { path: 'merchant/orders', element: C(<MerchantOrders />, ['merchant']) },
       { path: 'merchant/profile', element: C(<MerchantProfile />, ['merchant']) },
       { path: 'merchant/verification-status', element: C(<MerchantVerificationStatusPage />, ['merchant']) },
-
-      { path: 'admin', element: <Navigate to="/admin/dashboard" replace /> },
-      { path: 'admin/dashboard', element: C(<AdminDashboard />, ['admin']) },
-      { path: 'admin/profile', element: C(<AdminProfile />, ['admin']) },
-      { path: 'admin/customers', element: C(<CustomerManagement />, ['admin']) },
-      { path: 'admin/merchants', element: C(<MerchantManagement />, ['admin']) },
-      { path: 'admin/products', element: C(<ProductManagement />, ['admin']) },
-      { path: 'admin/demands', element: C(<DemandManagement />, ['admin']) },
-      { path: 'admin/groups', element: C(<DemandGroupManagement />, ['admin']) },
-      { path: 'admin/offers', element: C(<OfferManagement />, ['admin']) },
-      { path: 'admin/orders', element: C(<OrderManagement />, ['admin']) },
-      { path: 'admin/reports', element: C(<ReportsAnalytics />, ['admin']) },
-      { path: 'admin/settings', element: <Navigate to="/admin/dashboard" replace /> },
 
       { path: '*', element: <NotFoundPage /> },
     ],

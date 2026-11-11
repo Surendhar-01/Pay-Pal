@@ -30,8 +30,6 @@ import {
   BellOutlined,
   UserOutlined,
   ShopOutlined,
-  SafetyCertificateOutlined,
-  LineChartOutlined,
   SettingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -42,7 +40,6 @@ import {
   CarOutlined,
   SwapOutlined,
   DownOutlined,
-  DollarCircleOutlined,
   LogoutOutlined,
   CustomerServiceOutlined,
 } from '@ant-design/icons';
@@ -93,8 +90,6 @@ export const AppLayout: React.FC = () => {
 
   const navigateForRole = (selectedRole: ActiveRole) => {
     if (roleNavigationStarted.current || !authAction) return;
-    if (authAction === 'register' && selectedRole === 'admin') return;
-
     roleNavigationStarted.current = true;
     const destination = authAction === 'login'
       ? `/auth/login?role=${selectedRole}`
@@ -244,52 +239,8 @@ export const AppLayout: React.FC = () => {
     },
   ];
 
-  // Admin Navigation Items (SaaS design aligned with reference)
-  const adminMenuItems: MenuProps['items'] = [
-    {
-      key: '/admin/dashboard',
-      icon: <DashboardOutlined />,
-      label: 'Overview',
-    },
-    {
-      key: '/admin/offers',
-      icon: <TagsOutlined />,
-      label: 'Campaigns & Offers',
-    },
-    {
-      key: '/admin/products',
-      icon: <ShoppingOutlined />,
-      label: 'Product Catalog',
-    },
-    {
-      key: 'targeting-group',
-      icon: <TeamOutlined />,
-      label: 'Targeting & Demands',
-      children: [
-        { key: '/admin/demands', label: 'Customer Demands' },
-        { key: '/admin/groups', label: 'Demand Groups' },
-      ],
-    },
-    {
-      key: '/admin/reports',
-      icon: <LineChartOutlined />,
-      label: 'Performance',
-    },
-    {
-      key: 'payouts-group',
-      icon: <DollarCircleOutlined />,
-      label: 'Payouts & Escrow',
-      children: [
-        { key: '/admin/orders', label: 'Platform Orders' },
-        { key: '/admin/merchants', label: 'Merchant Accounts' },
-        { key: '/admin/customers', label: 'Customer Accounts' },
-      ],
-    },
-  ];
-
   let currentMenuItems = customerMenuItems;
   if (activeRole === 'merchant') currentMenuItems = merchantMenuItems;
-  if (activeRole === 'admin') currentMenuItems = adminMenuItems;
 
   // Selected key helper
   const selectedKeys = [location.pathname];
@@ -480,13 +431,7 @@ export const AppLayout: React.FC = () => {
 
         {/* Nav Menu */}
         <div
-          className={
-            activeRole === 'admin'
-              ? 'admin-sidebar'
-              : activeRole === 'merchant'
-              ? 'merchant-sidebar'
-              : 'customer-sidebar'
-          }
+          className={activeRole === 'merchant' ? 'merchant-sidebar' : 'customer-sidebar'}
           style={{
             overflowY: 'auto',
             height: !collapsed ? 'calc(100vh - 250px)' : 'calc(100vh - 140px)',
@@ -520,8 +465,7 @@ export const AppLayout: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
                 onClick={() => {
-                  if (activeRole === 'admin') navigate('/admin/dashboard');
-                  else if (activeRole === 'merchant') navigate('/merchant/profile');
+                  if (activeRole === 'merchant') navigate('/merchant/profile');
                   else navigate('/customer/profile');
                 }}
                 style={{
@@ -541,7 +485,7 @@ export const AppLayout: React.FC = () => {
               >
                 <UserOutlined style={{ fontSize: 14 }} />
                 <span>
-                  {activeRole === 'admin' ? 'Admin Overview' : activeRole === 'merchant' ? 'Merchant Profile' : 'My Account'}
+                  {activeRole === 'merchant' ? 'Merchant Profile' : 'My Account'}
                 </span>
               </div>
               <div

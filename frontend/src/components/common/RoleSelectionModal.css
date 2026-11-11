@@ -24,7 +24,7 @@
 
 .role-selection-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -40,7 +40,7 @@
     transform 180ms ease;
 }
 
-.role-selection-modal .role-selection-card:not(.role-selection-card--disabled):hover {
+.role-selection-modal .role-selection-card:hover {
   border-color: #91caff;
   box-shadow: 0 10px 24px rgba(22, 119, 255, 0.13);
   transform: translateY(-3px);
@@ -49,13 +49,6 @@
 .role-selection-modal .role-selection-card:focus-visible {
   outline: 3px solid rgba(22, 119, 255, 0.35);
   outline-offset: 2px;
-}
-
-.role-selection-modal .role-selection-card--disabled {
-  background: #f8fafc;
-  box-shadow: none;
-  cursor: not-allowed;
-  opacity: 0.78;
 }
 
 .role-selection-card-top {
@@ -101,22 +94,9 @@
   transition: background 180ms ease, color 180ms ease;
 }
 
-.role-selection-card:not(.role-selection-card--disabled):hover .role-selection-indicator {
+.role-selection-card:hover .role-selection-indicator {
   background: #1677ff;
   color: #fff;
-}
-
-.role-selection-tag {
-  margin: 0;
-  border-radius: 12px;
-}
-
-.role-selection-restriction {
-  display: block;
-  margin-top: 12px;
-  color: #8c6d1f;
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 @media (max-width: 640px) {
