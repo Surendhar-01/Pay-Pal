@@ -403,9 +403,16 @@ _DELIVERY_LOCATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _DELIVERY_REQUIREMENT_PATTERN = re.compile(
-    r"\b(?:(?:deliver(?:y)?\s+)?(?:by|before|within)|"
+    r"\b(?:(?:deliver(?:y)?\s+)?(?:by|before)|"
     r"required\s+delivery\s+date\s*(?:is|:))"
     r"\s+([a-z0-9][a-z0-9 ,.'-]{1,80}?)(?=[.;]|$)",
+    re.IGNORECASE,
+)
+_LEAD_TIME_PATTERN = re.compile(
+    rf"\b(?:(?:required\s+)?(?:delivery\s+)?lead\s+time\s*(?:is|of|:)?|"
+    rf"(?:delivery\s+)?within)\s*"
+    rf"(?P<value>{_NUMBER_WORD_PATTERN}\s+(?:business\s+)?"
+    r"(?:days?|weeks?|months?))\b",
     re.IGNORECASE,
 )
 
@@ -1297,6 +1304,11 @@ def _extract_explicit_requirements(
         if location_match:
             extracted.delivery_constraints["location"] = location_match.group(1).strip(" .,:;")
 
+        lead_time_match = _LEAD_TIME_PATTERN.search(text)
+        if lead_time_match:
+            extracted.delivery_constraints["lead_time"] = lead_time_match.group(
+                "value"
+            ).strip(" .,:;")
         delivery_match = _DELIVERY_REQUIREMENT_PATTERN.search(text)
         if delivery_match:
             extracted.delivery_constraints["requirement"] = delivery_match.group(1).strip(" .,:;")
@@ -1447,7 +1459,24 @@ def _resolve_ambiguous_budget_scope(
     if (
         commercial.get("price_type") != "ambiguous_budget"
         or not commercial.get("budget")
-        or previous_assistant is None
+    ):
+        return draft
+
+    quantity = commercial.get("quantity")
+    try:
+        quantity_value = Decimal(quantity) if quantity else None
+    except InvalidOperation:
+        quantity_value = None
+    if quantity_value == 1:
+        commercial["max_target_unit_price"] = commercial.pop("budget")
+        commercial["price_type"] = "maximum"
+        commercial.pop("price_clarification", None)
+        return RequirementDraft.model_validate(
+            {**draft.model_dump(), "commercial_constraints": commercial}
+        )
+
+    if (
+        previous_assistant is None
         or "each unit or for the whole order" not in previous_assistant.content.casefold()
     ):
         return draft
@@ -1725,7 +1754,7 @@ class ConversationService:
             )
             questions = []
             missing = []
-            status_value = "ready"
+            status_value = "conversational"
         elif (
             not _has_requirement_context(merged_draft)
             and not _is_requirement_request(request.message)
@@ -1733,7 +1762,7 @@ class ConversationService:
             assistant_message = generated.assistant_message
             questions = []
             missing = []
-            status_value = "ready"
+            status_value = "conversational"
         elif questions:
             custom_clarification = merged_draft.commercial_constraints.get(
                 "price_clarification"
@@ -1760,5 +1789,5 @@ class ConversationService:
             requirement_draft=merged_draft,
             missing_essential_information=missing,
             clarification_questions=questions,
-            ready_for_confirmation=not missing,
+            ready_for_confirmation=status_value == "ready" and not missing,
         )

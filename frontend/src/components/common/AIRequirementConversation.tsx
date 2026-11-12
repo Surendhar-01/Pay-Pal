@@ -469,6 +469,9 @@ export const AIRequirementConversation: React.FC = () => {
   const inputRef = useRef<TextAreaRef | null>(null);
   const matchingLock = useRef(false);
   const hasConversation = messages.length > 0;
+  const hasProductDraft = Boolean(
+    requirementDraft?.product_name || requirementDraft?.product_type
+  );
 
   useEffect(() => {
     try {
@@ -1017,7 +1020,7 @@ export const AIRequirementConversation: React.FC = () => {
             </form>
           )}
 
-          {ready && requirementDraft && (
+          {ready && hasProductDraft && requirementDraft && (
             <Card className="ai-requirement-card" bordered>
               <div className="ai-requirement-heading">
                 <div>

@@ -157,7 +157,8 @@ def test_greetings_receive_a_conversational_response_without_requirement_questio
     assert response.assistant_message == "Hello! How can I help you today?"
     assert response.clarification_questions == []
     assert response.missing_essential_information == []
-    assert response.ready_for_confirmation is True
+    assert response.status == "conversational"
+    assert response.ready_for_confirmation is False
 
 
 def test_general_conversation_uses_ai_response_without_requesting_product_details():
@@ -178,6 +179,8 @@ def test_general_conversation_uses_ai_response_without_requesting_product_detail
     assert response.assistant_message == "I'm doing well, thanks for asking. How can I help?"
     assert response.clarification_questions == []
     assert response.missing_essential_information == []
+    assert response.status == "conversational"
+    assert response.ready_for_confirmation is False
 
 
 def test_missing_essential_question_is_not_suppressed_permanently():
@@ -646,20 +649,17 @@ def test_laptop_requirements_survive_quantity_follow_up():
             "keyboard": "Backlit",
         },
         "commercial_constraints": {
-            "budget": "60000",
+            "max_target_unit_price": "60000",
             "currency": "INR",
-            "price_type": "ambiguous_budget",
+            "price_type": "maximum",
             "is_derived": "false",
-            "price_clarification": (
-                "Is that your budget for each unit or for the whole order?"
-            ),
             "quantity": "1",
             "unit": "units",
         },
         "delivery_constraints": {},
     }
-    assert second_response.missing_essential_information == ["price_clarification"]
-    assert second_response.ready_for_confirmation is False
+    assert second_response.missing_essential_information == []
+    assert second_response.ready_for_confirmation is True
 
 
 @pytest.mark.parametrize(
@@ -748,8 +748,9 @@ def test_complete_laptop_request_with_just_one_unit_does_not_ask_for_quantity():
     )
 
     assert response.requirement_draft.commercial_constraints["quantity"] == "1"
-    assert response.missing_essential_information == ["price_clarification"]
-    assert response.ready_for_confirmation is False
+    assert response.requirement_draft.commercial_constraints["max_target_unit_price"] == "80000"
+    assert response.missing_essential_information == []
+    assert response.ready_for_confirmation is True
     assert "How many" not in response.assistant_message
 
 
@@ -770,8 +771,9 @@ def test_quantity_from_existing_conversation_history_is_not_requested_again():
     )
 
     assert response.requirement_draft.commercial_constraints["quantity"] == "1"
-    assert response.missing_essential_information == ["price_clarification"]
-    assert response.ready_for_confirmation is False
+    assert response.requirement_draft.commercial_constraints["max_target_unit_price"] == "80000"
+    assert response.missing_essential_information == []
+    assert response.ready_for_confirmation is True
     assert "How many" not in response.assistant_message
 
 
@@ -813,17 +815,93 @@ def test_dell_xps_request_extracts_complete_confirmable_requirement_draft(monkey
     assert draft["commercial_constraints"] == {
         "quantity": "1",
         "unit": "unit",
-        "budget": "80000",
-        "price_type": "ambiguous_budget",
+        "max_target_unit_price": "80000",
+        "price_type": "maximum",
         "is_derived": "false",
-        "price_clarification": (
-            "Is that your budget for each unit or for the whole order?"
-        ),
         "currency": "INR",
     }
-    assert data["missing_essential_information"] == ["price_clarification"]
-    assert data["ready_for_confirmation"] is False
+    assert data["missing_essential_information"] == []
+    assert data["ready_for_confirmation"] is True
     assert "How many" not in data["assistant_message"]
+
+
+def test_complete_requirement_with_lead_time_is_confirmable_in_one_message():
+    from anyio import run
+
+    message = (
+        "I need an SS 304 water storage tank with a capacity of 5000 litres, "
+        "quantity 3 units. The target price is \u20b925,000 per unit, and the "
+        "required lead time is 2 weeks."
+    )
+    response = run(
+        ConversationService(FakeProvider(_empty_provider_response())).respond,
+        AIConversationRequest(message=message),
+    )
+
+    assert response.ready_for_confirmation is True
+    assert response.missing_essential_information == []
+    assert response.requirement_draft.product_type == "SS 304 water storage tank"
+    assert response.requirement_draft.mandatory_requirements["capacity"] == "5000 litres"
+    assert response.requirement_draft.mandatory_requirements["material"] == "SS 304"
+    assert response.requirement_draft.commercial_constraints == {
+        "quantity": "3",
+        "unit": "units",
+        "target_unit_price": "25000",
+        "price_type": "exact",
+        "is_derived": "false",
+        "currency": "INR",
+    }
+    assert response.requirement_draft.delivery_constraints == {"lead_time": "2 weeks"}
+
+
+def test_requirements_across_turns_preserve_details_and_only_ask_for_missing_essentials():
+    from anyio import run
+
+    first_message = "I need a laptop with 16GB RAM and a 512GB SSD."
+    service = ConversationService(FakeProvider(_empty_provider_response()))
+    first_response = run(
+        service.respond,
+        AIConversationRequest(message=first_message),
+    )
+
+    assert first_response.ready_for_confirmation is False
+    assert first_response.clarification_questions == ["How many do you need?"]
+
+    second_response = run(
+        service.respond,
+        AIConversationRequest(
+            message=(
+                "I need 2 units, price under \u20b940,000 per unit, and required "
+                "lead time is 3 weeks."
+            ),
+            history=[
+                ConversationMessage(role="user", content=first_message),
+                ConversationMessage(
+                    role="assistant",
+                    content=first_response.assistant_message,
+                ),
+            ],
+            requirement_draft=first_response.requirement_draft,
+        ),
+    )
+
+    assert second_response.ready_for_confirmation is True
+    assert second_response.missing_essential_information == []
+    assert second_response.requirement_draft.mandatory_requirements == {
+        "ram": "16GB",
+        "storage": "512GB SSD",
+    }
+    assert second_response.requirement_draft.commercial_constraints == {
+        "quantity": "2",
+        "unit": "units",
+        "max_target_unit_price": "40000",
+        "price_type": "maximum",
+        "is_derived": "false",
+        "currency": "INR",
+    }
+    assert second_response.requirement_draft.delivery_constraints == {
+        "lead_time": "3 weeks",
+    }
 
 
 def test_similar_alternatives_are_preferences_and_application_is_concise():

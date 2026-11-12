@@ -322,8 +322,9 @@ class RequirementDraft(BaseModel):
         default_factory=dict,
         max_length=16,
         description=(
-            "Delivery facts stated by the customer, using location for destination and "
-            "requirement for delivery timing or instructions."
+            "Delivery facts stated by the customer, using location for destination, "
+            "lead_time for explicit lead times, and requirement for other delivery "
+            "timing or instructions."
         ),
     )
 
@@ -550,7 +551,7 @@ class AIProviderResponse(BaseModel):
 
 class AIConversationResponse(BaseModel):
     assistant_message: str
-    status: Literal["collecting_information", "ready"]
+    status: Literal["conversational", "collecting_information", "ready"]
     requirement_draft: RequirementDraft
     missing_essential_information: list[str] = Field(default_factory=list)
     clarification_questions: list[str] = Field(default_factory=list)

@@ -17,7 +17,7 @@ export interface RequirementDraft {
 
 export interface AIConversationResponse {
   assistant_message: string;
-  status: 'collecting_information' | 'ready';
+  status: 'conversational' | 'collecting_information' | 'ready';
   requirement_draft: RequirementDraft;
   missing_essential_information: string[];
   clarification_questions: string[];
