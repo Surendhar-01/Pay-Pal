@@ -1566,7 +1566,13 @@ class ConversationService:
             "AI conversation service started request_id=%s provider=%s model=%s input_characters=%d",
             request_id_context.get(),
             settings.AI_PROVIDER,
-            settings.OLLAMA_MODEL if settings.AI_PROVIDER.strip().lower() == "ollama" else "unknown",
+            (
+                settings.OLLAMA_MODEL
+                if settings.AI_PROVIDER.strip().lower() == "ollama"
+                else settings.GROQ_MODEL
+                if settings.AI_PROVIDER.strip().lower() == "groq"
+                else "unknown"
+            ),
             input_characters,
         )
         generated = await self._provider.converse(

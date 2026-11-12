@@ -133,7 +133,14 @@ async def continue_conversation(request: Request) -> AIConversationResponse:
         + sum(len(item.content) for item in payload.conversation_history)
         + len(json.dumps(draft, ensure_ascii=False))
     )
-    model = settings.OLLAMA_MODEL if settings.AI_PROVIDER.strip().lower() == "ollama" else "unknown"
+    selected_provider = settings.AI_PROVIDER.strip().lower()
+    model = (
+        settings.OLLAMA_MODEL
+        if selected_provider == "ollama"
+        else settings.GROQ_MODEL
+        if selected_provider == "groq"
+        else "unknown"
+    )
     request.state.ai_trace = {
         "provider": settings.AI_PROVIDER,
         "model": model,

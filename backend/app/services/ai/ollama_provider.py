@@ -194,7 +194,7 @@ def _raise_for_ollama_error(
     raise AIProviderUnavailable("The AI provider is unavailable.")
 
 
-_SYSTEM_PROMPT = """You help customers describe products for a B2B marketplace.
+CONVERSATION_SYSTEM_PROMPT = """You help customers describe products for a B2B marketplace.
 Extract requirement facts from every user message in the conversation history and the
 current user message. The current draft is context to preserve, not a reason to return an
 empty draft. Prior assistant messages are not evidence of customer requirements.
@@ -376,7 +376,7 @@ Return only the English translation."""
             {
                 "role": "system",
                 "content": (
-                    f"{_SYSTEM_PROMPT}\n\nCurrent structured draft:\n"
+                    f"{CONVERSATION_SYSTEM_PROMPT}\n\nCurrent structured draft:\n"
                     f"{json.dumps(requirement_draft.model_dump(), ensure_ascii=False)}\n\n"
                     "Extract all customer-stated requirements into the response draft. "
                     "Do not return empty fields when the user messages or current draft "

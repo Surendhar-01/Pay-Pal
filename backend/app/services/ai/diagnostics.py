@@ -50,8 +50,13 @@ def ollama_request_headers(settings: Settings) -> Dict[str, str]:
 def provider_context(settings: Settings) -> str:
     """A log-safe summary of the configured AI provider target."""
     provider = (settings.AI_PROVIDER or "").strip().lower() or "unset"
-    model = (settings.OLLAMA_MODEL or "").strip() or "<unset>"
-    base = safe_ollama_base_url(settings.OLLAMA_BASE_URL)
+    if provider == "groq":
+        model = (settings.GROQ_MODEL or "").strip() or "<unset>"
+        base_url = (settings.GROQ_BASE_URL or "").strip()
+        base = safe_ollama_base_url(base_url) if base_url else "<default>"
+    else:
+        model = (settings.OLLAMA_MODEL or "").strip() or "<unset>"
+        base = safe_ollama_base_url(settings.OLLAMA_BASE_URL)
     return f"provider={provider}, model={model}, base={base}"
 
 
@@ -59,6 +64,7 @@ def loopback_in_deployed_environment(settings: Settings) -> bool:
     """True when a deployed backend is pointed at an unreachable loopback address."""
     environment = (settings.ENVIRONMENT or "").strip().lower()
     return (
-        environment not in _LOCAL_ENVIRONMENTS
+        (settings.AI_PROVIDER or "").strip().lower() == "ollama"
+        and environment not in _LOCAL_ENVIRONMENTS
         and is_loopback_url(settings.OLLAMA_BASE_URL)
     )

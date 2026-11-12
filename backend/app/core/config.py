@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = Field(default="", description="Admin login email")
     ADMIN_PASSWORD: str = Field(default="", description="Admin login password")
     GROQ_API_KEY: str = Field(default="", description="Groq API key for AI features")
+    GROQ_BASE_URL: str = Field(default="", description="Optional Groq-compatible API base URL")
+    GROQ_MODEL: str = Field(
+        default="openai/gpt-oss-20b",
+        description="Groq model used for AI conversations",
+    )
     AI_PROVIDER: str = Field(default="ollama", description="AI provider used for requirement conversations")
     OLLAMA_BASE_URL: str = Field(default="http://localhost:11434", description="Ollama API base URL")
     OLLAMA_MODEL: str = Field(
