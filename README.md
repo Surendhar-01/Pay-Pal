@@ -1,318 +1,192 @@
-# MarketTwin – A Demand-Driven Marketplace
+# MarketTwin
 
-MarketTwin is a demand-driven marketplace where buyers aggregate purchasing intent and merchants submit competitive offers. Customers can search for products; if an item is unavailable, they submit demands. The platform identifies similar demands, groups compatible buyers, and invites verified merchants to submit competitive fulfillment proposals. Customers purchase only after explicitly reviewing and approving the winning offer.
+MarketTwin is a demand-driven marketplace that helps customers discover products, express buying intent when a product is unavailable, and connect with merchants through grouped demand pools. The platform combines catalogue discovery, AI-assisted requirement extraction, demand aggregation, merchant bidding, offer validation, and checkout flows.
 
-## System Architecture & Roles
+This repository contains the backend API and the React + Vite frontend for the MarketTwin experience.
 
-1. **Customer**
-   - Searches catalog and creates product demands.
-   - Joins demand groups to unlock bulk pricing.
-   - Compares merchant offers and approves purchases explicitly.
+## Project Goals
 
-2. **Merchant**
-   - Views grouped demand pools.
-   - Submits competitive offers.
-   - Fulfills approved orders.
+- Aggregate similar customer intents into a single actionable demand group
+- Let merchants review grouped demand and submit competitive offers
+- Validate merchant offers before a customer selects a winner
+- Support production-style order flows and PayPal sandbox checkout
+- Offer admin visibility into demands, offers, orders, and platform health
 
-3. **Admin**
-   - Platform governance, category management, demand oversight.
-   - Merchant accreditation and dispute resolution.
-   - Analytics across demands, offers, and transactions.
-
-## Technology Stack
-
-### Frontend
-- React 18 + TypeScript
-- Vite 6
-- Tailwind CSS 3
-- React Router 6
-- Axios
-- Ant Design 5
-- Supabase JS client
+## Tech Stack
 
 ### Backend
 - Python 3.10+
 - FastAPI
 - Pydantic v2
-- Uvicorn
 - Supabase Python client
-- Groq SDK (optional AI features)
+- Uvicorn
+- Groq and Ollama-compatible AI providers
 
-### Database & Cloud
+### Frontend
+- React 18
+- TypeScript
+- Vite
+- Tailwind CSS
+- Ant Design
+- React Router
+
+### Data and platform services
 - Supabase PostgreSQL
-- Supabase Authentication
+- Supabase Auth
 - Supabase Storage
-- Supabase Realtime
+- Realtime subscriptions
+- PayPal Sandbox integration
 
 ## Repository Structure
 
-```
-markettwin/
+```text
+PayPal-Tharunika/
 ├── README.md
 ├── docs/
 │   └── DATABASE.md
 ├── backend/
-│   ├── .env.example
+│   ├── .env
 │   ├── requirements.txt
 │   ├── app/
-│   │   ├── main.py
-│   │   ├── api/v1/
+│   │   ├── api/
 │   │   ├── core/
+│   │   ├── main.py
 │   │   ├── schemas/
 │   │   └── services/
-│   ├── sql/migrations/
+│   ├── scripts/
+│   ├── sql/
 │   └── tests/
-└── frontend/
-    ├── .env.example
-    ├── package.json
-    ├── vite.config.ts
-    ├── tailwind.config.js
-    └── src/
-        ├── api/
-        ├── components/
-        ├── context/
-        ├── pages/
-        ├── services/
-        └── router/
+├── frontend/
+│   ├── .env
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── public/
+│   └── src/
+└── .gitignore
 ```
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
-- Node.js v18+ (v20+ recommended)
-- npm v9+
-- Python 3.10+
+- Python 3.10 or newer
+- Node.js 18+ and npm
 - Git
+- Access to a Supabase project
+- PayPal Sandbox credentials for checkout testing
 
-### Backend Setup
+## Backend Setup
+
+1. Create and activate a virtual environment:
 
 ```bash
 cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1   # Windows
-# source .venv/bin/activate     # macOS/Linux
-pip install -r requirements.txt
-copy .env.example .env          # Windows
-# cp .env.example .env          # macOS/Linux
 ```
 
-Edit `backend/.env` with your Supabase credentials:
+On Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+On macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+2. Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Create `backend/.env` with the required settings. Example:
 
 ```env
 PROJECT_NAME="MarketTwin API"
 ENVIRONMENT="development"
 DEBUG=True
 API_V1_STR="/api/v1"
-ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173,http://10.107.161.106:5173"
+ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
 
-SUPABASE_URL="https://your-project-id.supabase.co"
-SUPABASE_KEY="your-anon-key"
-SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
-SUPABASE_JWT_SECRET="your-jwt-secret"
+SUPABASE_URL="https://<project-ref>.supabase.co"
+SUPABASE_KEY="<supabase-anon-key>"
+SUPABASE_SERVICE_ROLE_KEY="<supabase-service-role-key>"
+SUPABASE_JWT_SECRET="<jwt-secret>"
 FRONTEND_URL="http://localhost:5173"
 
-ADMIN_EMAIL="admin@markettwin.com"
-ADMIN_PASSWORD="your-secure-admin-password"
+AI_PROVIDER="groq"
+GROQ_API_KEY="<your-key>"
+GROQ_BASE_URL="https://api.groq.com/openai/v1"
+GROQ_MODEL="openai/gpt-oss-20b"
 
-GROQ_API_KEY="your-groq-api-key"
-
-AI_PROVIDER="ollama"
-OLLAMA_BASE_URL="http://localhost:11434"
-OLLAMA_MODEL="qwen3.5:4b"
-
-PAYPAL_CLIENT_ID="your-paypal-client-id"
-PAYPAL_CLIENT_SECRET="your-paypal-client-secret"
+PAYPAL_CLIENT_ID="<sandbox-client-id>"
+PAYPAL_CLIENT_SECRET="<sandbox-client-secret>"
 PAYPAL_MODE="sandbox"
 ```
 
-For local AI conversations, run Ollama on the same machine as the backend and pull
-the configured model (`ollama pull qwen3.5:4b`). The backend
-calls Ollama at the configured base URL; do not expose Ollama's port publicly.
-The anonymous conversation endpoint is `POST /api/v1/ai/conversation`. It does
-not save conversations or create demands. A hosted backend such as Render cannot
-reach your computer through its own `localhost`; production inference needs a
-provider reachable from that backend.
-
-Run migrations:
+4. Start the API:
 
 ```bash
-python -c "import psycopg2; print('ok')"
-# Apply SQL files in backend/sql/migrations in order
-```
-
-Start backend:
-
-```bash
+cd backend
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-Backend URLs:
-- Base: http://localhost:8000
-- Health: http://localhost:8000/api/v1/health
-- Docs: http://localhost:8000/docs
+The API is available at:
+- http://localhost:8000
+- http://localhost:8000/docs
+- http://localhost:8000/api/v1/health
 
-## PayPal Sandbox Catalogue Checkout
+## Frontend Setup
 
-The catalogue purchase flow is available only in PayPal Sandbox mode. Backend
-configuration uses `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MODE`,
-and `FRONTEND_URL`. Set `PAYPAL_MODE=sandbox`; Live mode and non-Sandbox
-approval links are rejected. Keep PayPal credentials in `backend/.env` only.
-Do not add them to frontend environment variables.
-
-The backend re-runs the existing product matcher when quoting and creating an
-order. Only a selected exact-match product with all reported mandatory checks
-passing can be purchased. The server verifies catalogue price, currency, and
-stock, creates a pending internal order, then creates the PayPal order. The
-customer is sent to PayPal Sandbox; a return to MarketTwin is not proof of
-payment. The authenticated capture endpoint verifies the order and COMPLETED
-capture before setting the payment status to `Paid`. Failed, cancelled, or
-unverified captures remain unpaid. Capture retries are idempotent and can
-reconcile a provider-completed capture if local persistence was temporarily
-unavailable.
-
-### Required database changes
-
-Do not run these migrations automatically from the application. Review the
-live schema, data, constraints, and RLS policies first, and apply them manually
-to a staging database using the Supabase SQL Editor (or an approved SQL
-connection), in this order:
-
-1. `backend/sql/migrations/025_paypal_payment_compatibility.sql`
-2. `backend/sql/migrations/026_catalogue_paypal_checkout.sql`
-
-Migration 025 adds PayPal order/capture references and service-role-only
-payment RPCs. Migration 026 adds catalogue order snapshots, checkout
-idempotency, capture claim/recovery RPCs, and cancellation/failure events.
-Both preserve existing rows and do not replace RLS policies. The migrations
-have not been applied by this implementation. Live Supabase RLS policies and
-all live constraints could not be independently verified; review them before
-applying either migration.
-
-### Purchase API
-
-- `POST /api/v1/customer/orders/quote` — calculate a verified catalogue quote.
-- `POST /api/v1/customer/orders/checkout` — create/reuse an idempotent pending
-  catalogue order. Requires `product_id`, `quantity`, `requirements`, and
-  `idempotency_key`; price fields are not accepted from the client.
-- `GET /api/v1/customer/orders/{order_id}` — get the authenticated customer's
-  order.
-- `POST /api/v1/customer/orders/{order_id}/payments/paypal/create` — create or
-  resume the Sandbox PayPal order; returns an approval URL.
-- `POST /api/v1/customer/orders/{order_id}/payments/paypal/capture` — capture
-  and verify the PayPal order. Request body contains only `paypal_order_id`.
-- `POST /api/v1/customer/orders/{order_id}/payments/paypal/cancel` — record
-  checkout cancellation without marking the order paid.
-
-### Manual Sandbox test
-
-1. Apply reviewed migrations 025 and 026 manually in staging/Supabase.
-2. In PowerShell, start the backend:
-   ```powershell
-   cd D:\MarketTwin\PayPal\backend
-   .\.venv\Scripts\Activate.ps1
-   .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-   ```
-3. In a second PowerShell terminal, start the frontend:
-   ```powershell
-   cd D:\MarketTwin\PayPal\frontend
-   npm run dev
-   ```
-4. Log in to MarketTwin as a customer and run product matching.
-5. Confirm an exact match is shown with all mandatory checks passing. Confirm
-   alternatives and any product with a failed/unknown mandatory check have no
-   Purchase button.
-6. Click **Purchase**, review the verified product, quantity, delivery estimate,
-   currency, and total, then click **Continue to PayPal Sandbox**.
-7. Confirm the browser navigates to a PayPal Sandbox domain, then sign in using
-   the existing Personal Sandbox buyer account and approve the test payment.
-   Never use a production PayPal account or real payment credentials.
-8. On return, wait for the MarketTwin server-side capture verification. Confirm
-   the order shows `Paid` and review its PayPal capture ID in the database.
-9. Repeat and cancel at PayPal; verify the order remains unpaid. Refresh the
-   success page after a completed test to confirm it does not create a second
-   capture. Test a declined payment if supported by the Sandbox buyer flow.
-
-Actual PayPal buyer approval/capture and live RLS behavior must still be
-verified manually; automated tests mock PayPal HTTP requests.
-
-### Frontend Setup
+1. Install frontend dependencies:
 
 ```bash
 cd frontend
 npm install
-copy .env.example .env          # Windows
-# cp .env.example .env          # macOS/Linux
 ```
 
-Edit `frontend/.env`:
+2. Create `frontend/.env`:
 
 ```env
-# Leave empty for local development; Vite proxies /api to localhost:8000.
-VITE_API_BASE_URL=
-VITE_SUPABASE_URL=https://your-project-id.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_API_BASE_URL=http://localhost:8000
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<supabase-anon-key>
 ```
 
-Start frontend:
+3. Run the app:
 
 ```bash
 npm run dev
 ```
 
-Frontend URL: http://localhost:5173 (or the host's LAN address on port 5173).
-For production, set `VITE_API_BASE_URL` to the reachable backend URL before building.
+The frontend will usually run on:
+- http://localhost:5173
 
-Production build:
+## Database and Migrations
 
-```bash
-npm run build
-```
+Database schema and migration files live under:
 
-## Database Setup
+- `backend/sql/`
+- `backend/sql/migrations/`
 
-SQL migrations are located in `backend/sql/migrations`. Apply them in order to your Supabase PostgreSQL database.
+The repo documentation in `docs/DATABASE.md` explains the schema, migration expectations, and Supabase setup. Review those files before applying migrations to staging or production.
 
-See `docs/DATABASE.md` for:
-- Table relationships
-- RLS policies
-- Storage buckets
-- Realtime configuration
-- Environment setup
-
-Migration `015_phase3_atomic_demand_submission.sql` adds the Phase 3 price-range,
-fractional-quantity, ownership-policy, and atomic demand create/update contracts.
-Review and verify it against a staging database before applying it to production.
-Demand submission, editing, and analysis remain disabled by default through
-`DEMAND_PERSISTENCE_ENABLED` and `DEMAND_ANALYSIS_ENABLED`; enable them only after
-the migration and controlled staging checks succeed.
-
-## Authentication
-
-- Supabase Auth handles registration, login, password reset, and sessions.
-- Frontend uses only the anon key.
-- Backend verifies JWTs and enforces roles.
-- Admin accounts are provisioned securely through backend-controlled processes.
-- Role-based route protection is enforced in frontend and backend.
+Important:
+- Stable migrations should be applied in numeric order.
+- Draft or unapproved SQL files must be reviewed carefully before they are used in a live database.
+- `DEMAND_PERSISTENCE_ENABLED` and related feature flags should be treated as guarded settings until staging validation is complete.
 
 ## Core Features
 
 - Product catalogue and search
-- Customer demand creation
-- Demand requirement extraction and normalization
-- Similar demand grouping
-- Merchant bidding and offer submission
-- Offer validation and customer selection
-- Order creation and PayPal payment foundation
-- Order fulfillment and delivery tracking
-- Admin governance and analytics
-
-## Security
-
-- No hardcoded secrets in frontend.
-- Service-role key is backend-only.
-- RLS enabled on application tables.
-- Backend validates all protected operations.
-- PayPal credentials are server-side only.
+- Customer demand creation and review
+- AI-assisted demand requirement extraction
+- Similar demand grouping and merchant visibility
+- Merchant offer submission and validation
+- Offer selection and order creation
+- PayPal sandbox payment flows
+- Fulfillment tracking and admin monitoring
 
 ## Testing
 
@@ -320,7 +194,7 @@ the migration and controlled staging checks succeed.
 
 ```bash
 cd backend
-.\.venv\Scripts\python.exe -m pytest -v
+python -m pytest -v
 ```
 
 ### Frontend
@@ -330,16 +204,13 @@ cd frontend
 npm run build
 ```
 
-## Deployment Notes
+## Security Notes
 
-- Use production Supabase project and apply all migrations.
-- Configure environment variables for production.
-- Enable Supabase SMTP for email delivery.
-- Use PayPal sandbox for testing before live credentials.
-- Deploy frontend as SPA with routing fallback.
-- Deploy backend with Uvicorn/Gunicorn behind HTTPS.
-- Verify health checks, RLS, and payment flows before launch.
+- Keep Supabase service-role credentials on the backend only.
+- Do not expose PayPal secrets in frontend code or public environment files.
+- Use a sandbox account for PayPal testing before switching to live credentials.
+- Validate RLS policies and access rules before any production deployment.
 
-## License
+## Notes
 
-This project is provided for development and educational use. Add your preferred license as needed.
+This project is built for local development and staging validation. Production deployment requires reviewing database migrations, environment settings, and payment configuration before exposing the app to real users.
