@@ -30,6 +30,55 @@ _ESSENTIAL_QUESTIONS = {
     "currency": "Which currency should I use for that amount (for example, INR or USD)?",
 }
 
+_SIMPLE_GREETING_PATTERNS = (
+    re.compile(
+        r"^\s*(?:hi|hello|hey|hiya|hola|greetings|good\s+(?:morning|afternoon|evening|day))(?:\s+(?:there|friend|everyone|team|all))?\b[.!]?\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|what's\s+up|sup)(?:\s+(?:today|there|mate|friend))?\b[.!]?\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:good\s+(?:morning|afternoon|evening))\s+(?:everyone|there|friend|team)\b[.!]?\s*$",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _is_simple_greeting(text: str) -> bool:
+    """Return True when the message is a simple greeting or casual hello."""
+    if not text or not text.strip():
+        return False
+    normalized = re.sub(r"\s+", " ", text.strip())
+    return any(pattern.search(normalized) for pattern in _SIMPLE_GREETING_PATTERNS)
+
+
+def _has_requirement_context(draft: RequirementDraft) -> bool:
+    return bool(
+        draft.product_name
+        or draft.product_type
+        or draft.category
+        or draft.mandatory_requirements
+        or draft.optional_preferences
+        or draft.commercial_constraints
+        or draft.delivery_constraints
+    )
+
+
+_REQUIREMENT_INTENT_PATTERN = re.compile(
+    r"\b(?:i|we)\s+(?:am\s+|['’]m\s+|are\s+|['’]re\s+)?"
+    r"(?:looking\s+for|searching\s+for|need|require|want|would\s+like|"
+    r"plan\s+to\s+buy|want\s+to\s+buy|need\s+to\s+buy|buy|purchase|order)\b"
+    r"|\b(?:help\s+me\s+find|find\s+me|source\s+me|product\s+is)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_requirement_request(text: str) -> bool:
+    return bool(_REQUIREMENT_INTENT_PATTERN.search(text))
+
+
 _PRODUCT_PATTERNS = (
     re.compile(
         r"\b(?:the\s+)?product\s+is\s+(?:an?\s+|the\s+)?(.+?)"
@@ -1668,7 +1717,24 @@ class ConversationService:
 
         missing = _missing_essentials(merged_draft)
         questions = [_ESSENTIAL_QUESTIONS[missing[0]]] if missing else []
-        if questions:
+        if _is_simple_greeting(request.message):
+            # Respond naturally to greetings without forcing requirement collection.
+            assistant_message = (
+                generated.assistant_message
+                or "Hello! How can I help you find products today?"
+            )
+            questions = []
+            missing = []
+            status_value = "ready"
+        elif (
+            not _has_requirement_context(merged_draft)
+            and not _is_requirement_request(request.message)
+        ):
+            assistant_message = generated.assistant_message
+            questions = []
+            missing = []
+            status_value = "ready"
+        elif questions:
             custom_clarification = merged_draft.commercial_constraints.get(
                 "price_clarification"
             )
@@ -1677,17 +1743,20 @@ class ConversationService:
                 if missing[0] == "price_clarification" and custom_clarification
                 else "To continue, please tell me: " + " ".join(questions)
             )
+            status_value = "collecting_information"
         elif missing:
             assistant_message = "I still need the required details requested above before completing the summary."
+            status_value = "collecting_information"
         else:
             assistant_message = (
                 "I have enough required information. Please review the structured "
                 "requirement summary."
             )
+            status_value = "ready"
 
         return AIConversationResponse(
             assistant_message=assistant_message,
-            status="ready" if not missing else "collecting_information",
+            status=status_value,
             requirement_draft=merged_draft,
             missing_essential_information=missing,
             clarification_questions=questions,

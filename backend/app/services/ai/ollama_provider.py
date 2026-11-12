@@ -129,16 +129,18 @@ def _validation_error_details(error: ValidationError) -> list[str]:
 def _retry_instruction(validation_details: list[str]) -> str:
     errors = "\n".join(f"- {detail}" for detail in validation_details)
     return (
-        "Your previous response failed structured response validation. Correct only the "
-        "invalid fields listed below, and preserve every other valid field and user-stated "
-        "fact unchanged. Return the complete response as one JSON object matching the "
-        "supplied schema. Use meaningful assistant_message text. Represent missing "
-        "constraint maps as empty objects and omit blank entries. Keep purchase quantity "
-        "and price information in commercial_constraints, genuine product specifications "
-        "in mandatory_requirements, and leave delivery_constraints empty unless delivery "
-        "was specified. Price amounts may include a currency symbol or scale; preserve "
-        "their exact numerical meaning and explicit currency. Do not invent missing price "
-        "bounds, currency, specifications, or delivery preferences.\n"
+        "Your previous response did not pass structured response validation. Correct only "
+        "the invalid fields listed below, and preserve every other valid field and "
+        "user-stated fact unchanged. Return the complete response as one JSON object "
+        "matching the supplied schema. Use meaningful assistant_message text. Represent "
+        "missing constraint maps as empty objects and omit blank entries. Keep purchase "
+        "quantity and price information in commercial_constraints, genuine product "
+        "specifications in mandatory_requirements, and leave delivery_constraints empty "
+        "unless delivery was specified. Price amounts may include a currency symbol or "
+        "scale; preserve their exact numerical meaning and explicit currency. Do not "
+        "invent missing price bounds, currency, specifications, or delivery preferences. "
+        "A requirement must not appear in both mandatory_requirements and optional_preferences "
+        "for the same key in both mandatory_requirements and optional_preferences.\n"
         f"Validation errors to correct:\n{errors or '- Structured response was malformed.'}"
     )
 
@@ -265,6 +267,15 @@ field, leave it empty; never return placeholders, invented product types, or unr
 text. For a short clarification answer, update only the field that was asked and preserve
 all other values from the current draft. Do not ask optional questions or discuss/invent
 prices, stock, availability, merchants, delivery estimates, payment, or order status.
+
+Conversational messages: Not every user message contains product requirements. When the
+user sends a simple greeting (such as "Hi", "Hello", "Hey", "Good morning") or a casual
+message ("How are you?"), respond naturally and conversationally. Greet them back and
+briefly offer to help with product sourcing or requirement gathering. Do not force
+requirement extraction on non-product messages, and do not demand product details before
+replying. For product-related messages, follow the extraction rules above. The
+assistant_message must always be a meaningful, natural response appropriate to the user's
+message.
 Return only JSON matching the supplied response schema."""
 
 _MATCH_EXPLANATION_PROMPT = """You explain a deterministic product-matching result to a customer.
@@ -529,16 +540,9 @@ Return only the English translation."""
                     },
                 )
                 if attempt + 1 == _MAX_STRUCTURED_RESPONSE_ATTEMPTS:
-                    safe_details = "; ".join(validation_details)[:500]
-                    public_message = (
-                        "The AI provider could not produce valid structured requirements "
-                        "after retry."
-                    )
-                    if safe_details:
-                        public_message += f" Check: {safe_details}"
                     raise AIProviderInvalidResponse(
                         "The AI provider returned an invalid structured response.",
-                        public_message=public_message,
+                        public_message="The AI provider returned an invalid response. Please try again.",
                     ) from exc
                 ollama_messages = [
                     {

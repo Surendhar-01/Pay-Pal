@@ -135,6 +135,51 @@ def test_conversation_flags_missing_purchase_quantity():
     assert response.clarification_questions == ["How many do you need?"]
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["Hi", "Hello", "Hey", "Good morning", "How are you?"],
+)
+def test_greetings_receive_a_conversational_response_without_requirement_questions(message):
+    provider = FakeProvider(
+        AIProviderResponse(
+            assistant_message="Hello! How can I help you today?",
+            requirement_draft=RequirementDraft(),
+        )
+    )
+
+    from anyio import run
+
+    response = run(
+        ConversationService(provider).respond,
+        AIConversationRequest(message=message),
+    )
+
+    assert response.assistant_message == "Hello! How can I help you today?"
+    assert response.clarification_questions == []
+    assert response.missing_essential_information == []
+    assert response.ready_for_confirmation is True
+
+
+def test_general_conversation_uses_ai_response_without_requesting_product_details():
+    provider = FakeProvider(
+        AIProviderResponse(
+            assistant_message="I'm doing well, thanks for asking. How can I help?",
+            requirement_draft=RequirementDraft(),
+        )
+    )
+
+    from anyio import run
+
+    response = run(
+        ConversationService(provider).respond,
+        AIConversationRequest(message="How is your day going?"),
+    )
+
+    assert response.assistant_message == "I'm doing well, thanks for asking. How can I help?"
+    assert response.clarification_questions == []
+    assert response.missing_essential_information == []
+
+
 def test_missing_essential_question_is_not_suppressed_permanently():
     request = AIConversationRequest(
         message="I am not sure yet.",

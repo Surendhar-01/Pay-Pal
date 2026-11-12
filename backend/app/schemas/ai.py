@@ -507,6 +507,23 @@ class AIProviderResponse(BaseModel):
     assistant_message: str = Field(min_length=1, max_length=2000)
     requirement_draft: RequirementDraft
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_braced_price_values(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        draft = value.get("requirement_draft")
+        if not isinstance(draft, dict):
+            return value
+        commercial = draft.get("commercial_constraints")
+        if not isinstance(commercial, dict):
+            return value
+        for field in _PROVIDER_PRICE_FIELDS:
+            amount = commercial.get(field)
+            if isinstance(amount, str) and ("{" in amount or "}" in amount):
+                raise ValueError(f"{field} must be a positive numeric string.")
+        return value
+
     @field_validator("assistant_message")
     @classmethod
     def assistant_message_must_not_be_blank(cls, value: str) -> str:
