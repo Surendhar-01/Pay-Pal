@@ -9,6 +9,7 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 _ENV_FILE_PATH = os.path.join(_BACKEND_DIR, ".env")
 
 
+
 class Settings(BaseSettings):
     """
     Application Settings configuration via Pydantic BaseSettings.
